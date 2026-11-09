@@ -953,7 +953,15 @@ async function saveLlm() {
 
 async function testLlm(which) {
   try {
-    const { data } = await api.post('/config/llm/test', { which })
+    // 优先携带表单中当前正在编辑的值进行测试，未填的字段回退到已保存配置
+    const payload = {
+      which,
+      provider: llm.provider || null,
+      model_name: llm.model_name || null,
+      api_base: llm.api_base || null,
+      api_key: llm.api_key || null,
+    }
+    const { data } = await api.post('/config/llm/test', payload)
     message[data.ok ? 'success' : 'error'](data.message)
   } catch (error) {
     message.error(errorMessage(error))
