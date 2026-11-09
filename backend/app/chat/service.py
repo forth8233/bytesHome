@@ -27,6 +27,7 @@ from app.db.models import (
     ChatSession,
     Member,
     MemberEntityPermission,
+    MemberPreference,
     ReasoningTrace,
 )
 from app.llm.dsml import parse_dsml_decision
@@ -164,7 +165,13 @@ class ChatService:
             chat_session.updated_at = utcnow()
             await session.commit()
 
-        messages = build_messages(history, message)
+        try:
+            preferences = await self._preferences(member.id)
+        except Exception:  # noqa: BLE001 - 偏好加载失败不应阻断对话
+            logger.exception("chat.preferences_load_failed", member_id=member.id)
+            preferences = {}
+
+        messages = build_messages(history, message, preferences=preferences)
         route_result = None
         if self._fast_path is not None:
             try:
@@ -222,6 +229,36 @@ class ChatService:
             latency_ms=int((time.perf_counter() - started) * 1000),
             **outcome,
         )
+
+    async def _preferences(self, member_id: int) -> dict[str, str]:
+        """读取该成员沉淀的环境偏好（温度/光线/窗帘/加湿等）与综合场景预设，供慢路径参考。"""
+        try:
+            async with self._session_factory() as session:
+                rows = list(
+                    (
+                        await session.scalars(
+                            select(MemberPreference).where(
+                                MemberPreference.member_id == member_id,
+                                MemberPreference.key.like("climate.%"),
+                            )
+                        )
+                    ).all()
+                )
+                for domain in ("light.", "scene."):
+                    rows += list(
+                        (
+                            await session.scalars(
+                                select(MemberPreference).where(
+                                    MemberPreference.member_id == member_id,
+                                    MemberPreference.key.like(f"{domain}%"),
+                                )
+                            )
+                        ).all()
+                    )
+        except Exception:  # noqa: BLE001
+            logger.exception("chat.preferences_query_failed", member_id=member_id)
+            return {}
+        return {row.key: (row.value_json or row.value or "") for row in rows}
 
     async def _allow_slow_path(self, member_id: int) -> bool:
         if self._slow_limit <= 0:

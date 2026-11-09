@@ -21,6 +21,12 @@ from app.db.models import (
 )
 from app.fastpath.capabilities import FUNCTION_LABELS, build_capability
 from app.fastpath.entities import AliasRecord, EntityRef, EntityResolver, Resolution
+from app.fastpath.emotional import (
+    EmotionalFeeling,
+    build_emotional_actions,
+    emotional_hint,
+    match_emotional,
+)
 from app.fastpath.grammar import UNIT_BY_DOMAIN, ParsedIntent, parse_choice, parse_intent
 from app.fastpath.normalize import normalize
 from app.fastpath.rules import SceneRule, match_scene, scene_from_row
@@ -389,6 +395,19 @@ class FastPathEngine:
                     member, rule, states, resolver, view_patterns, settings
                 )
                 return self._finish(result, started)
+            # 情感类主观感受兜底：无匹配场景时按情感词映射设备动作
+            feeling = match_emotional(text)
+            if feeling is not None:
+                emotional_actions = build_emotional_actions(
+                    feeling, states, resolver, view_patterns
+                )
+                if emotional_actions:
+                    result = await self._emotional(
+                        member, feeling, emotional_actions,
+                        states, settings, key,
+                    )
+                    if result is not None:
+                        return self._finish(result, started)
             self._fallback_reasons["no_match"] += 1
             return None
 
@@ -459,8 +478,27 @@ class FastPathEngine:
         )
         if intent is None:
             payload["intent"] = None
+            emotional: dict[str, Any] | None = None
+            feeling = match_emotional(text)
+            if feeling is not None:
+                actions = build_emotional_actions(
+                    feeling, states, resolver, view_patterns
+                )
+                guard = await self._guard.check(
+                    actions, member=member, source="chat_fast_path"
+                )
+                emotional = emotional_hint(feeling, actions, states)
+                emotional["guard"] = {
+                    "passed": guard.passed,
+                    "requires_confirm": guard.requires_confirm,
+                    "risk_level": guard.risk_level,
+                    "reasons": guard.reasons,
+                }
+            payload["emotional"] = emotional
             payload["route"] = (
-                "fast_path" if rule is not None or voice_hit else "slow_path"
+                "fast_path"
+                if rule is not None or voice_hit or (emotional and emotional["targets"])
+                else "slow_path"
             )
             return payload
         payload["intent"] = {
@@ -1273,6 +1311,72 @@ class FastPathEngine:
             },
         )
         return result
+
+    # ---------- 情感类主观感受兜底 ----------
+
+    async def _emotional(
+        self,
+        member,
+        feeling: EmotionalFeeling,
+        actions: list[dict[str, Any]],
+        states: dict[str, dict],
+        settings: dict[str, Any],
+        key: tuple[int, int],
+    ) -> RouteResult | None:
+        """按情感词映射出的动作执行；走与场景一致的安全策略与执行流程。"""
+        if not self._allow_rate(member.id, int(settings["member_rate_limit_per_minute"])):
+            self._counters["rate_limited"] += 1
+            return RouteResult(status="denied", reply="操作太频繁了，请稍后再试。")
+
+        guard = await self._guard.check(actions, member=member, source="chat_fast_path")
+        if not guard.passed:
+            reason = "; ".join(guard.reasons)[:300]
+            await self._audit(
+                member,
+                "fast_path.denied",
+                target=feeling.matched_word,
+                detail={"kind": feeling.kind, "reasons": guard.reasons},
+            )
+            self._counters["denied"] += 1
+            return RouteResult(
+                status="denied",
+                reply=f"针对「{feeling.matched_word}」的调整被安全策略拦截：{reason}",
+            )
+
+        intent = ParsedIntent(kind="control", original=feeling.matched_word)
+        if guard.requires_confirm:
+            return await self._proposal(member, intent, guard)
+
+        result = await self._execute(
+            member, intent, guard.actions, key, reply=self._emotional_reply(feeling, guard.actions)
+        )
+        if result.status == "executed":
+            self._counters["emotional_executed"] += 1
+        return result
+
+    def _emotional_reply(
+        self, feeling: EmotionalFeeling, actions: list[dict[str, Any]]
+    ) -> str:
+        """按感受给出一句贴合依据的完成语，避免复用通用"已打开/已关闭"。"""
+        action = actions[0] if actions else {}
+        service = action.get("service")
+        data = action.get("data") or {}
+        name = self._name_of(str(action.get("entity_id") or ""))
+
+        if service == "set_temperature" and data.get("temperature") is not None:
+            return f"觉得{feeling.matched_word}，已把{name}调到 {data['temperature']:g} 度。"
+        if service == "set_hvac_mode":
+            mode_label = {
+                "heat": "制热", "cool": "制冷", "dry": "除湿", "fan_only": "换气",
+            }.get(data.get("hvac_mode"), "对应模式")
+            return f"觉得{feeling.matched_word}，已把{name}切到{mode_label}。"
+
+        verb = "打开"
+        if service in _OFF_SERVICES:
+            verb = "关闭"
+        elif service in _ON_SERVICES:
+            verb = "打开"
+        return f"针对「{feeling.matched_word}」，已{verb} {name}。"
 
     def _expand_action(
         self,

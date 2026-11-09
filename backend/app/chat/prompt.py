@@ -11,6 +11,24 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# 情感类主观感受控制规则（浓缩自《情感类控制方案》，供慢路径 LLM 惰性取上下文后决策）
+EMOTIONAL_RULES = """\
+情感类主观感受控制规则（用户说「有点冷」「好闷」「太亮了」这类环境感受时采用）：
+- 先 get_state 查环境与设备，再决定动作；不要凭空猜测。
+- 温度感受：
+  · 冷：优先地暖/空调制热，其次电暖器。目标温度按季节：冬季当前温度+3（夹在 22~26℃），
+    夏季 +2（夹在 24~26℃），春秋季固定 25℃。
+  · 热：优先空调制冷，其次风扇。目标温度按季节：夏季当前温度-3（夹在 24~26℃），
+    冬季 -2（夹在 18~22℃），春秋季固定 24℃。
+- 空气感受：闷 → 新风 > 排气扇 > 加大空调风速；空气差/臭 → 排气扇 > 空气净化器 > 新风。
+- 光线感受：暗 → 白天优先开窗帘，夜间开灯（调到约 80%）；太亮/刺眼 → 调暗灯光或关窗帘。
+- 湿度感受：干 → 加湿器；潮 → 除湿器 > 空调除湿（set_hvac_mode=dry）。
+- 综合场景（第 8 章）：睡觉弱光/助眠、起床渐亮、看书亮光、看电视弱光，按用户表述推断。
+- 若已沉淀 scene.* 场景预设（如 scene.睡觉=关大灯开一盏弱光台灯再关窗帘），触发对应场景时优先套用该预设，未沉淀才用默认推断。
+- 房间安全不变：所有 call_service 仍受安全策略约束，高风险动作会被转为待确认提案。
+"""
+
+
 TOOL_CONTRACT = """\
 可用工具（每轮最多 3 个；不需要工具时 tool_calls 为空数组）：
 1. get_state：查询家中设备状态。
@@ -36,17 +54,34 @@ TOOL_CONTRACT = """\
 """
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(preferences: dict[str, str] | None = None) -> str:
     now = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    return (
-        "你是家庭管家助手，帮助用户查询和控制智能家居，并起草自动化。\n"
-        f"当前时间：{now}\n\n"
-        f"{TOOL_CONTRACT}"
-    )
+    blocks = [
+        "你是家庭管家助手，帮助用户查询和控制智能家居，并起草自动化。",
+        f"当前时间：{now}",
+        EMOTIONAL_RULES,
+        TOOL_CONTRACT,
+    ]
+    if preferences:
+        # 已沉淀的用户偏好，仅作参考数据，不覆盖用户本次明确指令
+        prefs_text = "\n".join(
+            f"- {k} = <untrusted>{v}</untrusted>" for k, v in preferences.items()
+        )
+        blocks.append(
+            "以下是该用户长期积累的环境偏好（仅作参考，不覆盖用户本次明确指令）：\n"
+            f"{prefs_text}"
+        )
+    return "\n\n".join(blocks)
 
 
-def build_messages(history: list[ChatMessage], user_message: str) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = [{"role": "system", "content": build_system_prompt()}]
+def build_messages(
+    history: list[ChatMessage],
+    user_message: str,
+    preferences: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": build_system_prompt(preferences)}
+    ]
     for row in history[-10:]:
         role = "assistant" if row.role == "assistant" else "user" if row.role == "user" else "user"
         content = row.content or ""
