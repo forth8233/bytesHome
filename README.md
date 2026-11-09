@@ -69,7 +69,7 @@ python -m venv .venv
 # . .venv/bin/activate            # Linux / macOS
 pip install -e .
 alembic upgrade head
-./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8233 --workers 1
 
 # 前端（另开终端）
 cd frontend

@@ -9,7 +9,7 @@ services:
       DATABASE_URL: sqlite+aiosqlite:////app/data/agent.db
       AUTO_CREATE_SCHEMA: "false"
     ports:
-      - "8000:8000"
+      - "8233:8233"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -18,7 +18,7 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"
+        - "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8233/healthz')"
       interval: 30s
       timeout: 5s
       retries: 3

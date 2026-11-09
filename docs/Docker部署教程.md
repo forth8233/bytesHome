@@ -11,7 +11,7 @@ Home Agent 由两部分组成：
 | 后端 | FastAPI + SQLite | 业务逻辑、语音解析快路径、大模型慢路径、Home Assistant 对接、提案审批、消息渠道 |
 | 前端 | Vue 3 + Vite 静态资源 | 管理界面：聊天、场景、提案、配置、记忆 |
 
-后端本身不托管前端静态文件，二者需要一起部署。仓库自带的 `docker-compose.yml` 直接暴露后端的 `8000` 端口；需要浏览器统一入口时，可再追加一个 Nginx `web` 服务，用它同时托管前端页面并反向代理 `/api` 到后端（见「托管前端」一节的选配方式）。
+后端本身不托管前端静态文件，二者需要一起部署。仓库自带的 `docker-compose.yml` 直接暴露后端的 `8233` 端口；需要浏览器统一入口时，可再追加一个 Nginx `web` 服务，用它同时托管前端页面并反向代理 `/api` 到后端（见「托管前端」一节的选配方式）。
 
 整套系统依赖的外部服务：
 
@@ -124,7 +124,7 @@ services:
       DATABASE_URL: sqlite+aiosqlite:////app/data/agent.db
       AUTO_CREATE_SCHEMA: "false"
     ports:
-      - "8000:8000"
+      - "8233:8233"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -133,7 +133,7 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"
+        - "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8233/healthz')"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -142,7 +142,7 @@ services:
 
 要点：
 
-- 后端容器直接暴露宿主机的 `8000` 端口，`http://<服务器 IP>:8000` 可访问后端 API 与健康检查。
+- 后端容器直接暴露宿主机的 `8233` 端口，`http://<服务器 IP>:8233` 可访问后端 API 与健康检查。
 - 该编排只负责后端。前端是独立构建产物，托管方式见下文的「托管前端」附录——仓库自带这份 compose，**不额外新增 `web` 服务**。
 - 数据库 / 日志经 `./data`、`./logs` 挂载落盘。
 
@@ -184,7 +184,7 @@ server {
 
     # API 反向代理到后端
     location /api/ {
-        proxy_pass http://agent:8000;
+        proxy_pass http://agent:8233;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -195,15 +195,15 @@ server {
 
     # 健康检查直通后端
     location = /healthz {
-        proxy_pass http://agent:8000;
+        proxy_pass http://agent:8233;
     }
     location = /readyz {
-        proxy_pass http://agent:8000;
+        proxy_pass http://agent:8233;
     }
 }
 ```
 
-> 注意：该 `web` 服务与 `web.conf` 是**可选**的，仓库根目录并不自带 `web.conf`。未追加时后端仍是 `agent` 容器、通过 `http://<服务器 IP>:8000` 访问 API；追加后从 `http://<服务器 IP>/` 访问完整界面，Nginx 里用 `http://agent:8000` 即可从同一 Docker 网络访问后端。
+> 注意：该 `web` 服务与 `web.conf` 是**可选**的，仓库根目录并不自带 `web.conf`。未追加时后端仍是 `agent` 容器、通过 `http://<服务器 IP>:8233` 访问 API；追加后从 `http://<服务器 IP>/` 访问完整界面，Nginx 里用 `http://agent:8233` 即可从同一 Docker 网络访问后端。
 
 ### 启动
 
@@ -217,7 +217,7 @@ docker compose ps
 等待 `agent` 的健康检查通过（首次 `start_period` 约 20 秒），然后访问：
 
 ```text
-http://<服务器 IP>:8000
+http://<服务器 IP>:8233
 ```
 
 用 `.env` 里 `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` 登录。若你额外启用了「托管前端」的 Nginx `web` 服务，则从 `http://<服务器 IP>/` 访问完整界面。
@@ -246,8 +246,8 @@ docker compose up -d
 | 现象 | 处理 |
 | --- | --- |
 | 后端一直重启 / 健康检查失败 | 查看 `docker compose logs agent`；多数是 `.env` 缺项或 LLM/HA 未配置导致 `/readyz` 503，此时应看 `/healthz` 是否存活 |
-| 前端能打开但页面白屏 | 确认你是否启用了 Nginx `web` 服务：启用了则检查挂载的 `web.conf` 是否正确代理 `http://agent:8000`、`frontend/dist` 是否存在；未启用时后端不托管前端，直接访问 `http://<服务器 IP>:8000` 走 API 而非页面 |
-| 登录一直转圈 | 确认已用 Nginx `web` 服务托管前端（后端本身不托管页面）；在后端日志或 `curl http://<服务器 IP>:8000/api/channels` 排查 `/api` 是否可达 |
+| 前端能打开但页面白屏 | 确认你是否启用了 Nginx `web` 服务：启用了则检查挂载的 `web.conf` 是否正确代理 `http://agent:8233`、`frontend/dist` 是否存在；未启用时后端不托管前端，直接访问 `http://<服务器 IP>:8233` 走 API 而非页面 |
+| 登录一直转圈 | 确认已用 Nginx `web` 服务托管前端（后端本身不托管页面）；在后端日志或 `curl http://<服务器 IP>:8233/api/channels` 排查 `/api` 是否可达 |
 | 访问不到 Home Assistant | 确认 HA 地址是后端容器可达的地址；容器无法访问 `localhost` 指向的 HA，需填 HA 所在主机的局域网 IP |
 | 数据库锁错误 | 确认没有被多份 `docker compose` 同时指向同一个 `./data` 目录 |
 
@@ -278,9 +278,9 @@ cp .env.example .env && vi .env
 
 ```bash
 alembic upgrade head
-./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8233 --workers 1
 # Linux/macOS 用：
-# ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+# ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8233 --workers 1
 ```
 
 推荐用 systemd 托管：
@@ -293,7 +293,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/opt/byteAgent/backend
-ExecStart=/opt/byteAgent/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+ExecStart=/opt/byteAgent/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8233 --workers 1
 Restart=always
 RestartSec=5
 
@@ -314,7 +314,7 @@ sudo systemctl enable --now home-agent
 cd frontend && npm run build
 ```
 
-配置 Nginx，把 `/` 指向 `frontend/dist`，/`/api/` 反向代理到 `127.0.0.1:8000`，SSE 相关 `proxy_buffering off`。Nginx 配置与上文 `web.conf` 基本一致，只需把 `proxy_pass http://agent:8000` 改为 `http://127.0.0.1:8000`。
+配置 Nginx，把 `/` 指向 `frontend/dist`，/`/api/` 反向代理到 `127.0.0.1:8233`，SSE 相关 `proxy_buffering off`。Nginx 配置与上文 `web.conf` 基本一致，只需把 `proxy_pass http://agent:8233` 改为 `http://127.0.0.1:8233`。
 
 Windows 内测可用 NSSM 或任务计划程序托管上述后端启动命令；更细致的运维说明（备份、日志、健康检查语义、安全要求）见《部署与运维.md》。
 
