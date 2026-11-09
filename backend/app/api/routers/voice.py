@@ -709,7 +709,7 @@ async def voice_directory(_: AdminUser, request: Request) -> dict[str, Any]:
     return await engine.voice_directory()
 
 
-def _group_out(row: VoiceGroupList) -> dict[str, Any]:
+def _group_list_out(row: VoiceGroupList) -> dict[str, Any]:
     return {
         "id": row.id,
         "name": row.name,
@@ -736,7 +736,7 @@ async def list_group_lists(_: AdminUser, session: DbSession) -> dict[str, Any]:
     rows = (
         await session.scalars(select(VoiceGroupList).order_by(VoiceGroupList.id))
     ).all()
-    return {"items": [_group_out(row) for row in rows]}
+    return {"items": [_group_list_out(row) for row in rows]}
 
 
 @router.post("/group-lists", status_code=status.HTTP_201_CREATED)
@@ -759,11 +759,11 @@ async def create_group_list(
         member_id=admin.id,
         action="fastpath.voice.group_list_created",
         target=f"{payload.device_type}:{payload.name}"[:255],
-        detail={"group_list": _group_out(row)},
+        detail={"group_list": _group_list_out(row)},
     )
     await session.commit()
     await _reload_engine(request)
-    return _group_out(row)
+    return _group_list_out(row)
 
 
 @router.put("/group-lists/{group_id}")
@@ -790,11 +790,11 @@ async def update_group_list(
         member_id=admin.id,
         action="fastpath.voice.group_list_updated",
         target=f"{row.device_type}:{row.name}"[:255],
-        detail={"group_list": _group_out(row)},
+        detail={"group_list": _group_list_out(row)},
     )
     await session.commit()
     await _reload_engine(request)
-    return _group_out(row)
+    return _group_list_out(row)
 
 
 @router.delete("/group-lists/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
