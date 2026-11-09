@@ -1,6 +1,6 @@
 <script setup>
 import { computed, h, onMounted, reactive, ref } from 'vue'
-import { NButton, NSelect, NSpace, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { NButton, NSelect, NSpace, NSwitch, NTag, NDynamicTags, useDialog, useMessage } from 'naive-ui'
 
 import api, { errorMessage } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -112,11 +112,14 @@ const voiceImportResult = ref(null)
 const voiceProfiles = ref([])
 const voiceEntryModal = ref(false)
 const voiceEntryForm = reactive({
-  id: null,
+  id: null, // 编辑时为组内第一个词的 id（仅用于判定系统/自定义与锁定词库）
+  entryIds: [],
   lexicon: 'value',
   entryType: 2,
   term: '',
+  origTerm: '', // 编辑时的原词条名，改名时作为组定位键
   alias: '',
+  aliases: [], // 编辑时整组别名，保存时整体替换
   canonical: '',
   functionsText: '',
   unit: '',
@@ -509,12 +512,17 @@ async function testVoice() {
 }
 
 function openVoiceEntry(row = null) {
+  const aliases =
+    row?.aliases && row.aliases.length ? row.aliases : row?.alias ? [row.alias] : []
   Object.assign(voiceEntryForm, {
     id: row?.id || null,
+    entryIds: row?.entry_ids || [],
     lexicon: row?.lexicon || 'value',
     entryType: row?.entry_type ?? 2,
     term: row?.term || '',
-    alias: row?.alias || '',
+    origTerm: row?.term || '',
+    alias: '',
+    aliases,
     canonical: row?.canonical || '',
     functionsText: (row?.functions || []).join(', '),
     unit: row?.unit || '',
@@ -530,22 +538,53 @@ function parseFunctions(text) {
     .filter(Boolean)
 }
 
+function parseAliases(text) {
+  const seen = new Set()
+  const out = []
+  for (const item of text.split(/[,，、\s]+/)) {
+    const alias = item.trim()
+    if (alias && !seen.has(alias)) {
+      seen.add(alias)
+      out.push(alias)
+    }
+  }
+  return out
+}
+
 async function saveVoiceEntry() {
+  const term = voiceEntryForm.term.trim()
+  const mergedAliases = parseAliases(voiceEntryForm.aliases.join(','))
+  if (!mergedAliases.length) {
+    message.error('请至少填写一个别名')
+    return
+  }
+  // 未填词条名时用第一条别名兜底，与后端 create 语义一致
+  const actingTerm = term || mergedAliases[0]
   const payload = {
-    term: voiceEntryForm.term.trim(),
-    alias: voiceEntryForm.alias.trim(),
+    lexicon: voiceEntryForm.lexicon,
+    term: actingTerm,
+    aliases: mergedAliases,
     canonical: voiceEntryForm.canonical.trim(),
     functions: parseFunctions(voiceEntryForm.functionsText),
     unit: voiceEntryForm.unit.trim(),
     numeric_value: voiceEntryForm.numericValue,
   }
-  if (!payload.alias) {
-    message.error('别名不能为空')
-    return
-  }
   try {
     if (voiceEntryForm.id) {
-      await api.put(`/fastpath/voice/entries/${voiceEntryForm.id}`, payload)
+      // 整组编辑：以原词条定位，整体替换别名集合；仅当显式改名时发送 new_term
+      const body = {
+        lexicon: voiceEntryForm.lexicon,
+        term: voiceEntryForm.origTerm,
+        aliases: mergedAliases,
+        canonical: payload.canonical,
+        functions: payload.functions,
+        unit: payload.unit,
+        numeric_value: payload.numeric_value,
+      }
+      if (term && term !== voiceEntryForm.origTerm) {
+        body.new_term = actingTerm
+      }
+      await api.put(`/fastpath/voice/entries/group`, body)
     } else {
       await api.post('/fastpath/voice/entries', {
         ...payload,
@@ -563,7 +602,11 @@ async function saveVoiceEntry() {
 
 async function toggleVoiceEntry(row, enabled) {
   try {
-    await api.put(`/fastpath/voice/entries/${row.id}`, { enabled })
+    await api.put(`/fastpath/voice/entries/group`, {
+      lexicon: row.lexicon,
+      term: row.term,
+      enabled,
+    })
     row.enabled = enabled
     await Promise.allSettled([loadVoiceLexicons(), loadFastPath()])
   } catch (error) {
@@ -573,14 +616,17 @@ async function toggleVoiceEntry(row, enabled) {
 }
 
 function removeVoiceEntry(row) {
+  const aliases = row.aliases && row.aliases.length ? row.aliases : [row.alias]
   dialog.warning({
     title: '删除自定义词条',
-    content: `确认删除「${row.alias}」？`,
+    content: `确认删除整组「${row.term}」及其 ${aliases.length} 个别名？`,
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        await api.delete(`/fastpath/voice/entries/${row.id}`)
+        await api.delete(`/fastpath/voice/entries/group`, {
+          data: { lexicon: row.lexicon, term: row.term },
+        })
         message.success('已删除，词库已重载')
         await loadVoice()
       } catch (error) {
@@ -1373,7 +1419,23 @@ const voiceEntryColumns = [
     render: (row) => LEXICON_LABELS[row.lexicon] || row.lexicon,
   },
   { title: '词条', key: 'term', minWidth: 120 },
-  { title: '别名', key: 'alias', minWidth: 140 },
+  {
+    title: '别名',
+    key: 'aliases',
+    minWidth: 220,
+    render: (row) => {
+      const aliases =
+        row.aliases && row.aliases.length ? row.aliases : [row.alias].filter(Boolean)
+      return h(
+        NSpace,
+        { size: 4, wrap: true },
+        {
+          default: () =>
+            aliases.map((alias) => h(NTag, { size: 'small' }, { default: () => alias })),
+        },
+      )
+    },
+  },
   { title: '标识符', key: 'canonical', minWidth: 120 },
   {
     title: '功能',
@@ -2672,8 +2734,14 @@ onMounted(loadAll)
         <n-form-item label="词条名">
           <n-input v-model:value="voiceEntryForm.term" />
         </n-form-item>
-        <n-form-item label="别名">
-          <n-input v-model:value="voiceEntryForm.alias" placeholder="用于匹配的说法" />
+        <n-form-item
+          :label="voiceEntryForm.id ? '别名（可多个）' : '别名'"
+        >
+          <n-dynamic-tags
+            v-model:value="voiceEntryForm.aliases"
+            :max="30"
+            placeholder="输入后回车添加别名"
+          />
         </n-form-item>
         <n-form-item label="标识符（canonical）">
           <n-input v-model:value="voiceEntryForm.canonical" placeholder="brightness / 90% / on" />

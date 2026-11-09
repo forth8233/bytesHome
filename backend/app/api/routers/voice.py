@@ -48,7 +48,8 @@ class EntryIn(BaseModel):
     lexicon: str = Field(min_length=1, max_length=32)
     term: str = Field(default="", max_length=64)
     canonical: str = Field(default="", max_length=128)
-    alias: str = Field(min_length=1, max_length=64)
+    alias: str = Field(default="", max_length=64)
+    aliases: list[str] = Field(default_factory=list)
     functions: list[str] = Field(default_factory=list)
     unit: str = Field(default="", max_length=16)
     numeric_value: float | None = None
@@ -62,6 +63,27 @@ class EntryPatch(BaseModel):
     functions: list[str] | None = None
     unit: str | None = Field(default=None, max_length=16)
     numeric_value: float | None = None
+
+
+class EntryGroupIn(BaseModel):
+    """按词（grouped by lexicon+term）整组编辑。别名集合整体替换。"""
+
+    lexicon: str = Field(min_length=1, max_length=32)
+    term: str = Field(min_length=1, max_length=64)
+    new_term: str | None = Field(default=None, max_length=64)
+    canonical: str | None = Field(default=None, max_length=128)
+    aliases: list[str] | None = None
+    functions: list[str] | None = None
+    unit: str | None = Field(default=None, max_length=16)
+    numeric_value: float | None = None
+    enabled: bool | None = None
+
+
+class EntryGroupDeleteIn(BaseModel):
+    """按词（grouped by lexicon+term）整组删除。"""
+
+    lexicon: str = Field(min_length=1, max_length=32)
+    term: str = Field(min_length=1, max_length=64)
 
 
 class ProfileIn(BaseModel):
@@ -107,6 +129,31 @@ def _entry_out(row: VoiceLexiconEntry) -> dict[str, Any]:
         "source": row.source,
         "enabled": row.enabled,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _group_out(rows: list[VoiceLexiconEntry]) -> dict[str, Any]:
+    """把同词（lexicon+term）的多行聚合为一行，别名汇总展示。"""
+    first = rows[0]
+    return {
+        "lexicon": first.lexicon,
+        "term": first.term,
+        "canonical": first.canonical,
+        "functions": _loads(first.functions_json, []),
+        "unit": first.unit,
+        "numeric_value": first.numeric_value,
+        "source": first.source,
+        "entry_type": first.entry_type,
+        "aliases": [row.alias for row in rows],
+        "entry_ids": [row.id for row in rows],
+        "enabled": any(row.enabled for row in rows),
+        # 任一子行是系统词条，则该组按系统对待（名称等字段锁定）
+        "system": any(row.entry_type != 2 for row in rows),
+        "updated_at": max(
+            (r.updated_at for r in rows if r.updated_at), default=None
+        ).isoformat()
+        if any(r.updated_at for r in rows)
+        else None,
     }
 
 
@@ -186,23 +233,58 @@ async def list_entries(
         )
     if enabled is not None:
         conditions.append(VoiceLexiconEntry.enabled.is_(enabled))
-    base = select(VoiceLexiconEntry)
+
+    # 以 (lexicon, term) 作为词条分组键，先按组分页取顶层词
+    group_cols = (VoiceLexiconEntry.lexicon, VoiceLexiconEntry.term)
+    group_base = (
+        select(*group_cols)
+        .select_from(VoiceLexiconEntry)
+    )
     if conditions:
-        base = base.where(*conditions)
+        group_base = group_base.where(*conditions)
     total = (
-        await session.execute(
-            select(func.count()).select_from(base.subquery())
-        )
+        await session.execute(select(func.count()).select_from(group_base.subquery()))
     ).scalar_one()
-    rows = (
-        await session.scalars(
-            base.order_by(VoiceLexiconEntry.lexicon, VoiceLexiconEntry.id)
+    groups = (
+        await session.execute(
+            group_base.group_by(*group_cols)
+            .order_by(
+                VoiceLexiconEntry.lexicon.asc(),
+                VoiceLexiconEntry.term.asc(),
+            )
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
     ).all()
+
+    items: list[dict[str, Any]] = []
+    if groups:
+        # 取这些组的所有行再做 Python 聚合（每词别名数量有限，无损分页）
+        rows = (
+            await session.scalars(
+                select(VoiceLexiconEntry)
+                .where(
+                    VoiceLexiconEntry.lexicon.in_({g[0] for g in groups}),
+                    VoiceLexiconEntry.term.in_({g[1] for g in groups}),
+                )
+                .order_by(VoiceLexiconEntry.lexicon, VoiceLexiconEntry.term, VoiceLexiconEntry.id)
+            )
+        ).all()
+        bucket: dict[tuple[str, str], list[VoiceLexiconEntry]] = {}
+        for row in rows:
+            bucket.setdefault((row.lexicon, row.term), []).append(row)
+        # 只取本页请求的组键，避免独立 in_ 兜底误带出其它 (lexicon, term) 组合
+        keys = [(g[0], g[1]) for g in groups]
+        items = [_group_out(bucket.get(key, [])) for key in keys]
+        items = sorted(
+            items,
+            key=lambda it: (
+                it["lexicon"],
+                it["term"],
+            ),
+        )
     return {
-        "items": [_entry_out(row) for row in rows],
+        "items": items,
         "total": int(total),
         "page": page,
         "page_size": page_size,
@@ -214,19 +296,33 @@ async def create_entry(
     payload: EntryIn, admin: AdminUser, session: DbSession, request: Request
 ) -> dict[str, Any]:
     _check_lexicon(payload.lexicon)
-    row = VoiceLexiconEntry(
-        lexicon=payload.lexicon,
-        term=payload.term or payload.alias,
-        canonical=payload.canonical,
-        alias=payload.alias,
-        functions_json=json.dumps(payload.functions, ensure_ascii=False),
-        unit=payload.unit,
-        numeric_value=payload.numeric_value,
-        entry_type=2,
-        source="manual",
-        enabled=True,
-    )
-    session.add(row)
+    aliases = [a.strip() for a in (payload.aliases or []) if a.strip()]
+    if payload.alias:
+        aliases.insert(0, payload.alias.strip())
+    if payload.alias and not payload.term:
+        # 兼容旧前端：不传 term 时用第一条别名兜底
+        payload.term = payload.alias
+    aliases = list(dict.fromkeys(aliases))
+    if not aliases:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "at least one alias required"
+        )
+    add = []
+    for alias in aliases:
+        row = VoiceLexiconEntry(
+            lexicon=payload.lexicon,
+            term=payload.term or alias,
+            canonical=payload.canonical,
+            alias=alias,
+            functions_json=json.dumps(payload.functions, ensure_ascii=False),
+            unit=payload.unit,
+            numeric_value=payload.numeric_value,
+            entry_type=2,
+            source="manual",
+            enabled=True,
+        )
+        add.append(row)
+    session.add_all(add)
     try:
         await session.flush()
     except IntegrityError as exc:
@@ -238,13 +334,171 @@ async def create_entry(
         session,
         member_id=admin.id,
         action="fastpath.voice.entry_created",
-        target=f"{payload.lexicon}:{payload.alias}"[:255],
-        detail={"entry": _entry_out(row)},
+        target=f"{payload.lexicon}:{payload.term}"[:255],
+        detail={"aliases": aliases, "entry_count": len(add)},
     )
     await session.commit()
     await _reload_engine(request)
-    return _entry_out(row)
+    return _group_out(add)
 
+
+async def _group_rows(session, lexicon: str, term: str) -> list[VoiceLexiconEntry]:
+    result = await session.scalars(
+        select(VoiceLexiconEntry).where(
+            VoiceLexiconEntry.lexicon == lexicon,
+            VoiceLexiconEntry.term == term,
+        )
+    )
+    rows = list(result.all())
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "entry group not found")
+    return rows
+
+
+@router.put("/entries/group")
+async def update_entry_group(
+    payload: EntryGroupIn, admin: AdminUser, session: DbSession, request: Request
+) -> dict[str, Any]:
+    _check_lexicon(payload.lexicon)
+    rows = await _group_rows(session, payload.lexicon, payload.term)
+    system = any(r.entry_type != 2 for r in rows)
+
+    # 收集要改写的字段
+    changes = payload.model_dump(exclude_unset=True)
+    new_term = changes.pop("new_term", None)
+    aliases = changes.pop("aliases", None)
+    set_fields = {}
+    for key in ("canonical", "functions", "unit", "numeric_value"):
+        if key in changes and changes[key] is not None:
+            set_fields[key] = changes[key]
+
+    def _set_common(row: VoiceLexiconEntry) -> None:
+        for key, value in set_fields.items():
+            if key == "functions":
+                row.functions_json = json.dumps(value, ensure_ascii=False)
+            else:
+                setattr(row, key, value)
+        if new_term is not None and new_term != row.term:
+            row.term = new_term
+        row.updated_at = utcnow()
+
+    existing_ids = [r.id for r in rows]
+    if system:
+        # 系统组只能整体启停
+        if new_term is not None or set_fields or aliases is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "system entries only allow enabling or disabling",
+            )
+        if changes.get("enabled") is not None:
+            for r in rows:
+                r.enabled = bool(changes["enabled"])
+                r.updated_at = utcnow()
+        add_audit(
+            session,
+            member_id=admin.id,
+            action="fastpath.voice.entry_updated",
+            target=f"{payload.lexicon}:{payload.term}"[:255],
+            detail={"group": True, "entry_ids": existing_ids, "changes": changes},
+        )
+        await session.commit()
+        await _reload_engine(request)
+        fresh = await _group_rows(session, payload.lexicon, new_term or payload.term)
+        return _group_out(fresh)
+
+    if aliases is not None:
+        aliases = [a.strip() for a in aliases if a.strip()]
+        aliases = list(dict.fromkeys(aliases))
+        if not aliases:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "at least one alias required"
+            )
+        # 别名集合整体替换：删除多余行，更新/新增其余
+        existing_by_alias: dict[str, VoiceLexiconEntry] = {}
+        for r in rows:
+            existing_by_alias[r.alias] = r
+        target_aliases = list(aliases)
+        add = []
+        for alias in target_aliases:
+            row = existing_by_alias.pop(alias, None)
+            if row is None:
+                row = VoiceLexiconEntry(
+                    lexicon=payload.lexicon,
+                    term=new_term or payload.term,
+                    canonical=set_fields.get("canonical", rows[0].canonical),
+                    alias=alias,
+                    functions_json=rows[0].functions_json,
+                    unit=rows[0].unit,
+                    numeric_value=rows[0].numeric_value,
+                    entry_type=2,
+                    source="manual",
+                    enabled=True,
+                )
+                add.append(row)
+            else:
+                _set_common(row)
+        # 删除被移除的别名行
+        orphan_ids = [r.id for r in existing_by_alias.values()]
+        if orphan_ids:
+            await session.execute(
+                VoiceLexiconEntry.__table__.delete().where(
+                    VoiceLexiconEntry.id.in_(orphan_ids)
+                )
+            )
+        session.add_all(add)
+        session.flush()
+    else:
+        for r in rows:
+            _set_common(r)
+        if changes.get("enabled") is not None:
+            enabled = bool(changes["enabled"])
+            for r in rows:
+                r.enabled = enabled
+
+    add_audit(
+        session,
+        member_id=admin.id,
+        action="fastpath.voice.entry_updated",
+        target=f"{payload.lexicon}:{payload.term}"[:255],
+        detail={"group": True, "entry_ids": existing_ids, "changes": changes},
+    )
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "alias already exists in this lexicon"
+        ) from exc
+    await _reload_engine(request)
+    fresh = await _group_rows(session, payload.lexicon, new_term or payload.term)
+    return _group_out(fresh)
+
+
+@router.delete("/entries/group", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_entry_group(
+    payload: EntryGroupDeleteIn, admin: AdminUser, session: DbSession, request: Request
+) -> None:
+    _check_lexicon(payload.lexicon)
+    rows = await _group_rows(session, payload.lexicon, payload.term)
+    if any(r.entry_type != 2 for r in rows):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "system entries cannot be deleted",
+        )
+    add_audit(
+        session,
+        member_id=admin.id,
+        action="fastpath.voice.entry_deleted",
+        target=f"{payload.lexicon}:{payload.term}"[:255],
+        detail={"entry_ids": [r.id for r in rows]},
+    )
+    await session.execute(
+        VoiceLexiconEntry.__table__.delete().where(
+            VoiceLexiconEntry.id.in_([r.id for r in rows])
+        )
+    )
+    await session.commit()
+    await _reload_engine(request)
 
 @router.put("/entries/{entry_id}")
 async def update_entry(
