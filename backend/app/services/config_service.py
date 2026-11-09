@@ -55,8 +55,37 @@ DEFAULT_LLM: dict[str, Any] = {
 }
 
 DEFAULT_WHITELIST: dict[str, Any] = {
-    "entities": {"allow": [], "deny": []},
-    "services": {"allow": [], "deny": []},
+    "entities": {
+        "allow": [
+            "light.*",
+            "switch.*",
+            "climate.*",
+            "cover.*",
+            "media_player.*",
+            "fan.*",
+            "lock.*",
+            "scene.*",
+            "script.*",
+            "automation.*",
+        ],
+        "deny": [],
+    },
+    "services": {
+        "allow": [
+            "light.*",
+            "switch.*",
+            "climate.*",
+            "cover.*",
+            "media_player.*",
+            "fan.*",
+            "lock.*",
+            "scene.*",
+            "script.*",
+            "automation.*",
+            "homeassistant.*",
+        ],
+        "deny": [],
+    },
     "param_rules": {
         "climate.set_temperature": {"temperature": [16, 30]},
         "light.turn_on": {"brightness_pct": [1, 100]},
