@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Runtime data
+data/
+logs/
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Secrets
+.env
+backend/.env
+*.secret
+*initial_admin_password*
+
+# Claude Code local settings (command rules can contain pasted keys)
+.claude/settings.local.json
+
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# Editor
+.idea/
+.vscode/
+.DS_Store
