@@ -32,3 +32,7 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+
+# Local reference docs (not uploaded to repo)
+主动式家庭管家 Agent 方案说明书*.md
+/智能家居语音技能/
