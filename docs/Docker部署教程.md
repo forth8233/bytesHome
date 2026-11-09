@@ -11,7 +11,7 @@ Home Agent 由两部分组成：
 | 后端 | FastAPI + SQLite | 业务逻辑、语音解析快路径、大模型慢路径、Home Assistant 对接、提案审批、消息渠道 |
 | 前端 | Vue 3 + Vite 静态资源 | 管理界面：聊天、场景、提案、配置、记忆 |
 
-后端本身不托管前端静态文件，二者需要一起部署。Docker 方式会把前端构建产物放进 Nginx，由 Nginx 同时托管前端页面并反向代理 `/api` 到后端。
+后端本身不托管前端静态文件，二者需要一起部署。仓库自带的 `docker-compose.yml` 直接暴露后端的 `8000` 端口；需要浏览器统一入口时，可再追加一个 Nginx `web` 服务，用它同时托管前端页面并反向代理 `/api` 到后端（见「托管前端」一节的选配方式）。
 
 整套系统依赖的外部服务：
 
@@ -110,9 +110,7 @@ cd ..
 
 ### docker-compose.yml
 
-项目根部的 `docker-compose.yml` 负责起后端容器。为了一次性把前端也托管起来，推荐在下方基础上追加一个 `web` 服务,用 Nginx 托管 `dist` 并反向代理 `/api`。
-
-以下是一份可用的完整编排（把后端与前端一起照管）：
+项目根部的 `docker-compose.yml` 就是后端容器本身的编排，保持原样即可：
 
 ```yaml
 services:
@@ -125,8 +123,8 @@ services:
     environment:
       DATABASE_URL: sqlite+aiosqlite:////app/data/agent.db
       AUTO_CREATE_SCHEMA: "false"
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -140,7 +138,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+```
 
+要点：
+
+- 后端容器直接暴露宿主机的 `8000` 端口，`http://<服务器 IP>:8000` 可访问后端 API 与健康检查。
+- 该编排只负责后端。前端是独立构建产物，托管方式见下文的「托管前端」附录——仓库自带这份 compose，**不额外新增 `web` 服务**。
+- 数据库 / 日志经 `./data`、`./logs` 挂载落盘。
+
+### 托管前端（可选）
+
+后端本身不托管前端静态文件。仓库的 `docker-compose.yml` 没有内置前端服务，访问完整管理界面有几种做法，按需选用：
+
+- **仅内测 / 本机**：在 `frontend/` 下执行 `npm run dev`，用 Vite 开发服务器访问 `http://127.0.0.1:5173`。
+- **服务器统一入口（推荐长期运行）**：追加一个 Nginx `web` 服务和 `web.conf`，由 Nginx 托管 `dist` 并反向代理 `/api`。需要时在下方基础上给 `docker-compose.yml` 追加：
+
+```yaml
   web:
     image: nginx:1.27-alpine
     container_name: home-agent-web
@@ -154,15 +167,7 @@ services:
       - ./web.conf:/etc/nginx/conf.d/default.conf:ro
 ```
 
-说明：
-
-- 后端容器只暴露内部端口 `8000`，不直接对外，由 Nginx 转发。
-- 若你想用后端默认端口 `8000` 直接对外访问 API，可把 `expose` 改回 `ports: ["8000:8000"]`，但这样前端 `/api` 仍需 Nginx 转发。
-- `web.conf` 见下节。
-
-### web.conf（Nginx 配置）
-
-新建 `web.conf`，内容如下。它把首页交给前端 `dist`，把 `/api` 与 `healthz` 等后端接口转发给后端容器：
+其中 `./web.conf` 需在项目根部新建，内容如下。它把首页交给前端 `dist`，把 `/api` 与健康检查接口转发给后端容器：
 
 ```nginx
 server {
@@ -198,7 +203,7 @@ server {
 }
 ```
 
-> 后端容器名是 `agent`，Nginx 里用 `http://agent:8000` 即可从 `depends_on` 关联的同一 Docker 网络中访问。
+> 注意：该 `web` 服务与 `web.conf` 是**可选**的，仓库根目录并不自带 `web.conf`。未追加时后端仍是 `agent` 容器、通过 `http://<服务器 IP>:8000` 访问 API；追加后从 `http://<服务器 IP>/` 访问完整界面，Nginx 里用 `http://agent:8000` 即可从同一 Docker 网络访问后端。
 
 ### 启动
 
@@ -212,16 +217,15 @@ docker compose ps
 等待 `agent` 的健康检查通过（首次 `start_period` 约 20 秒），然后访问：
 
 ```text
-http://<服务器 IP>/
+http://<服务器 IP>:8000
 ```
 
-用 `.env` 里 `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` 登录。
+用 `.env` 里 `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` 登录。若你额外启用了「托管前端」的 Nginx `web` 服务，则从 `http://<服务器 IP>/` 访问完整界面。
 
-查看日志：
+默认只有 `agent` 一个容器，查看日志：
 
 ```bash
 docker compose logs -f agent
-docker compose logs -f web
 ```
 
 ### 升级与新版本
@@ -242,8 +246,8 @@ docker compose up -d
 | 现象 | 处理 |
 | --- | --- |
 | 后端一直重启 / 健康检查失败 | 查看 `docker compose logs agent`；多数是 `.env` 缺项或 LLM/HA 未配置导致 `/readyz` 503，此时应看 `/healthz` 是否存活 |
-| 前端能打开但页面白屏 | 确认 `web.conf` 已挂载到 `/etc/nginx/conf.d/default.conf`，且 `frontend/dist` 存在 |
-| 登录一直转圈 | 确认 Nginx 的 `/api` 已代理到 `http://agent:8000`；在后端日志或 `curl http://<服务器>:/api/channels` 排查 |
+| 前端能打开但页面白屏 | 确认你是否启用了 Nginx `web` 服务：启用了则检查挂载的 `web.conf` 是否正确代理 `http://agent:8000`、`frontend/dist` 是否存在；未启用时后端不托管前端，直接访问 `http://<服务器 IP>:8000` 走 API 而非页面 |
+| 登录一直转圈 | 确认已用 Nginx `web` 服务托管前端（后端本身不托管页面）；在后端日志或 `curl http://<服务器 IP>:8000/api/channels` 排查 `/api` 是否可达 |
 | 访问不到 Home Assistant | 确认 HA 地址是后端容器可达的地址；容器无法访问 `localhost` 指向的 HA，需填 HA 所在主机的局域网 IP |
 | 数据库锁错误 | 确认没有被多份 `docker compose` 同时指向同一个 `./data` 目录 |
 
