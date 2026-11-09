@@ -2166,6 +2166,12 @@ onMounted(loadAll)
                 <n-button size="small" :loading="voiceImporting">上传 xlsx</n-button>
               </n-upload>
               <span class="muted">仅支持汇总版 xlsx，导入后自动热重载；相同文件不会重复导入。</span>
+              <n-button
+                tag="a"
+                size="small"
+                href="/api/fastpath/voice/template"
+                target="_blank"
+              >下载模板</n-button>
             </n-space>
             <pre v-if="voiceImportResult" class="mono test-result">{{
               JSON.stringify(voiceImportResult, null, 2)

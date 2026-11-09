@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Integer, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +27,21 @@ from app.services.audit import add_audit
 router = APIRouter(prefix="/api/fastpath/voice", tags=["voice"])
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+# 词库导入模板，随本后端打包（COPY app）提供下载
+VOICE_TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "fastpath" / "voice_template.xlsx"
+
+
+@router.get("/template")
+async def download_template() -> FileResponse:
+    """下载语音词库导入模板（.xlsx），与解析器列结构对齐。"""
+    if not VOICE_TEMPLATE_PATH.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "template not found")
+    return FileResponse(
+        VOICE_TEMPLATE_PATH,
+        filename="语音词库导入模板.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 class EntryIn(BaseModel):
