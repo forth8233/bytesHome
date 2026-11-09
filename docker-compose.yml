@@ -8,8 +8,6 @@ services:
     environment:
       DATABASE_URL: sqlite+aiosqlite:////app/data/agent.db
       AUTO_CREATE_SCHEMA: "false"
-    ports:
-      - "8233:8233"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -23,3 +21,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  web:
+    build: ./frontend
+    container_name: home-agent-web
+    restart: unless-stopped
+    depends_on:
+      - agent
+    ports:
+      - "8233:8233"
