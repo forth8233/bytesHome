@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.chat.automation import AutomationValidationError, parse_automation
+from app.chat.memory_extract import extract_and_store_memory
 from app.chat.prompt import build_messages, tool_results_message, utcnow, wrap_untrusted
 from app.chat.schema import ChatDecision
 from app.core.logging import scrub_text
@@ -178,6 +179,8 @@ class ChatService:
             logger.warning("chat.slow_path_rate_limited", member_id=member.id)
             return await self._finish_slow_path(
                 session_id,
+                member=member,
+                user_text=message,
                 reply=_RATE_LIMIT_REPLY,
                 tool_trace=[],
                 proposal=None,
@@ -214,6 +217,8 @@ class ChatService:
             }
         return await self._finish_slow_path(
             session_id,
+            member=member,
+            user_text=message,
             latency_ms=int((time.perf_counter() - started) * 1000),
             **outcome,
         )
@@ -338,6 +343,8 @@ class ChatService:
         self,
         session_id: int,
         *,
+        member: Member,
+        user_text: str,
         reply: str,
         tool_trace: list[dict[str, Any]],
         proposal: dict[str, Any] | None,
@@ -366,6 +373,15 @@ class ChatService:
             if chat_session is not None:
                 chat_session.updated_at = utcnow()
             await session.commit()
+
+        # 自动记忆通道：成功路径尽力抽取可沉淀的长期偏好，失败静默不影响回复
+        if route_status not in {"degraded", "timeout", "error", "rate_limited"}:
+            try:
+                await extract_and_store_memory(
+                    self._client, self._session_factory, member, user_text
+                )
+            except Exception:  # noqa: BLE001 - 记忆抽取绝不允许污染对话
+                logger.exception("chat.memory_extract_schedule_failed")
 
         return {
             "session_id": session_id,

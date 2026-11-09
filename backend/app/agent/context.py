@@ -315,4 +315,6 @@ class ContextBuilder:
             .scalars()
             .all()
         )
-        return {row.key: _u(row.value) or "" for row in rows}
+        return {
+            row.key: _u(row.value_json or row.value) or "" for row in rows
+        }

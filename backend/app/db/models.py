@@ -59,6 +59,13 @@ class MemberPreference(Base):
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
     key: Mapped[str] = mapped_column(String(128))
     value: Mapped[str] = mapped_column(Text)
+    # 结构化偏好：domain 由 key 首段推导，value_json 承载与 value_type 一致的值
+    domain: Mapped[str] = mapped_column(String(32), default="")
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    scope: Mapped[str] = mapped_column(String(16), default="member")
+    value_type: Mapped[str] = mapped_column(String(16), default="text")
+    value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = _ts()
 
 

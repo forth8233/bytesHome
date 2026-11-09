@@ -15,12 +15,22 @@ KEY_PATTERN = r"^[a-z_]+\.[^\s]{1,64}$"
 class PreferenceIn(BaseModel):
     key: str = Field(min_length=3, max_length=128, pattern=KEY_PATTERN)
     value: str = Field(min_length=1, max_length=2000)
+    value_type: str = Field(default="text", max_length=16)
+    value_json: str | None = Field(default=None, max_length=4000)
+    source: str = Field(default="manual", max_length=16)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    scope: str = Field(default="member", max_length=16)
     member_id: int | None = None
 
 
 class PreferenceUpdate(BaseModel):
     key: str | None = Field(default=None, min_length=3, max_length=128, pattern=KEY_PATTERN)
     value: str | None = Field(default=None, min_length=1, max_length=2000)
+    value_type: str | None = Field(default=None, max_length=16)
+    value_json: str | None = Field(default=None, max_length=4000)
+    source: str | None = Field(default=None, max_length=16)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    scope: str | None = Field(default=None, max_length=16)
 
 
 class PurgeIn(BaseModel):
@@ -58,17 +68,34 @@ async def create_preference(
     payload: PreferenceIn, user: CurrentUser, session: DbSession
 ) -> dict[str, Any]:
     target = _target_member_id(user, payload.member_id)
-    return await MemoryService(session).upsert_preference(target, payload.key, payload.value)
+    return await MemoryService(session).upsert_preference(
+        target,
+        payload.key,
+        payload.value,
+        value_type=payload.value_type,
+        value_json=payload.value_json,
+        source=payload.source,
+        confidence=payload.confidence,
+        scope=payload.scope,
+    )
 
 
 @router.put("/preference/{pref_id}")
 async def update_preference(
     pref_id: int, payload: PreferenceUpdate, user: CurrentUser, session: DbSession
 ) -> dict[str, Any]:
-    if payload.key is None and payload.value is None:
+    if payload.key is None and payload.value is None and payload.value_json is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "nothing to update")
     return await MemoryService(session).update_preference(
-        user.id, pref_id, key=payload.key, value=payload.value
+        user.id,
+        pref_id,
+        key=payload.key,
+        value=payload.value,
+        value_type=payload.value_type,
+        value_json=payload.value_json,
+        source=payload.source,
+        confidence=payload.confidence,
+        scope=payload.scope,
     )
 
 

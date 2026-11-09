@@ -17,6 +17,31 @@ const feedback = ref([])
 const loading = ref(false)
 const newKey = ref('')
 const newValue = ref('')
+const newValueType = ref('text')
+const newValueJson = ref('')
+
+const SOURCE_LABELS = { manual: '手写', llm: '自动', rule: '规则', voice: '语音' }
+const SCOPE_LABELS = { member: '本成员', home: '全家', global: '全局' }
+const TYPE_LABELS = {
+  text: '文本',
+  number: '数字',
+  number_range: '数值区间',
+  boolean: '布尔',
+  string_enum: '枚举',
+  json: 'JSON',
+}
+const VALUE_TYPE_OPTIONS = Object.entries(TYPE_LABELS).map(([value, label]) => ({
+  label,
+  value,
+}))
+const SOURCE_OPTIONS = Object.entries(SOURCE_LABELS).map(([value, label]) => ({
+  label,
+  value,
+}))
+const SCOPE_OPTIONS = Object.entries(SCOPE_LABELS).map(([value, label]) => ({
+  label,
+  value,
+}))
 
 const isAdmin = computed(() => auth.isAdmin)
 const memberOptions = computed(() =>
@@ -49,7 +74,12 @@ async function loadMemories() {
       api.get('/memories/preference', { params }),
       api.get('/memories/feedback', { params }),
     ])
-    preferences.value = prefs.data.map((item) => ({ ...item, draftValue: item.value }))
+    preferences.value = prefs.data.map((item) => ({
+      ...item,
+      draftValue: item.value,
+      draftValueType: item.value_type || 'text',
+      draftValueJson: item.value_json || '',
+    }))
     feedback.value = rows.data
   } catch (error) {
     message.error(errorMessage(error))
@@ -63,18 +93,27 @@ function reloadAll() {
 }
 
 async function addPreference() {
-  if (!newKey.value.trim() || !newValue.value.trim()) {
-    message.warning('请填写 key 和 value')
+  if (!newKey.value.trim()) {
+    message.warning('请填写 key')
+    return
+  }
+  const value = newValue.value.trim() || newValueJson.value.trim()
+  if (!value) {
+    message.warning('请填写 value 或结构化值')
     return
   }
   try {
     await api.post('/memories/preference', {
       key: newKey.value.trim(),
-      value: newValue.value.trim(),
+      value,
+      value_type: newValueType.value,
+      value_json: newValueJson.value.trim() || null,
       member_id: memberId.value,
     })
     newKey.value = ''
     newValue.value = ''
+    newValueJson.value = ''
+    newValueType.value = 'text'
     message.success('已保存')
     loadMemories()
   } catch (error) {
@@ -83,10 +122,23 @@ async function addPreference() {
 }
 
 async function savePreference(row) {
-  if (row.draftValue === row.value) return
+  const changed = {
+    value: row.draftValue,
+    value_type: row.draftValueType,
+    value_json: row.draftValueJson.trim() || null,
+  }
+  const same =
+    row.value === changed.value &&
+    row.value_type === changed.value_type &&
+    (row.value_json || '') === changed.value_json
+  if (same) return
   try {
-    await api.put(`/memories/preference/${row.id}`, { value: row.draftValue })
-    row.value = row.draftValue
+    await api.put(`/memories/preference/${row.id}`, changed)
+    Object.assign(row, {
+      value: changed.value,
+      value_type: changed.value_type,
+      value_json: changed.value_json,
+    })
     message.success('已更新')
   } catch (error) {
     message.error(errorMessage(error))
@@ -200,9 +252,15 @@ onMounted(async () => {
     </div>
 
     <n-card class="section-card" title="偏好记忆" size="small">
-      <div class="memory-toolbar">
-        <n-input v-model:value="newKey" placeholder="key，如 climate.夏季温度" style="width: 250px" />
-        <n-input v-model:value="newValue" placeholder="value，如 26" style="width: 220px" />
+      <div class="memory-toolbar" style="flex-wrap: wrap; gap: 8px">
+        <n-input v-model:value="newKey" placeholder="key，如 climate.夏季空调温度" style="width: 240px" />
+        <n-input v-model:value="newValue" placeholder="value 说明，如 26 左右" style="width: 180px" />
+        <n-select v-model:value="newValueType" :options="VALUE_TYPE_OPTIONS" style="width: 130px" />
+        <n-input
+          v-model:value="newValueJson"
+          placeholder="结构化值，如 26 或 [22,28] 或 true"
+          style="width: 220px"
+        />
         <n-button type="primary" @click="addPreference">新增</n-button>
       </div>
       <div v-if="!preferences.length" class="muted">暂无偏好记忆</div>
@@ -215,13 +273,37 @@ onMounted(async () => {
           align-items: center;
           padding: 9px 0;
           border-bottom: 1px solid rgba(128, 128, 128, 0.14);
+          flex-wrap: wrap;
         "
       >
-        <code style="min-width: 190px">{{ row.key }}</code>
-        <n-input v-model:value="row.draftValue" size="small" style="flex: 1" />
+        <code style="min-width: 200px">{{ row.key }}</code>
+        <n-tag size="small" type="default">{{ TYPE_LABELS[row.value_type] || row.value_type }}</n-tag>
+        <n-tag size="small" :type="row.source === 'llm' ? 'info' : 'default'">
+          来源:{{ SOURCE_LABELS[row.source] || row.source }}
+        </n-tag>
+        <n-tag v-if="row.source === 'llm'" size="small" type="warning">
+          置信度:{{ row.confidence }}
+        </n-tag>
+        <n-input v-model:value="row.draftValue" size="small" style="flex: 1; min-width: 180px" />
+        <n-select
+          v-model:value="row.draftValueType"
+          :options="VALUE_TYPE_OPTIONS"
+          size="small"
+          style="width: 120px"
+        />
+        <n-input
+          v-model:value="row.draftValueJson"
+          size="small"
+          placeholder="结构化值（可空）"
+          style="flex: 1; min-width: 160px"
+        />
         <n-button
           size="small"
-          :disabled="row.draftValue === row.value"
+          :disabled="
+            row.value === row.draftValue &&
+            row.value_type === row.draftValueType &&
+            (row.value_json || '') === (row.draftValueJson || '')
+          "
           @click="savePreference(row)"
         >
           保存
