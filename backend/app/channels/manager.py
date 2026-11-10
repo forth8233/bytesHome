@@ -48,6 +48,11 @@ class ChannelManager:
         self._wire_label_resolver()
         self._tasks: list[asyncio.Task] = []
         self._generation = 0
+        # 热重启串行化：stop 旧适配器（线程/事件循环收尾）与 start 新适配器
+        # 之间必须互斥。若两次 apply 交叠，新线程可能在新事件循环就绪前抓到
+        # 正在被旧线程 teardown 的循环，触发 lark-oapi 的
+        # "This event loop is already running"（表现为「连接异常」）。
+        self._apply_lock = asyncio.Lock()
 
     def _wire_label_resolver(self) -> None:
         """把「飞书渠道 → 可读名称」解析器接到 ChatService，供会话列表展示来源。
@@ -87,43 +92,52 @@ class ChannelManager:
         await self.apply()
 
     async def stop(self) -> None:
-        await self._stop_adapters()
+        async with self._apply_lock:
+            await self._stop_adapters()
         await self.dispatcher.stop()
 
     async def apply(self) -> dict[str, Any]:
-        """按当前配置重建适配器（先停旧的，再起新的）。"""
-        self._generation += 1
-        generation = self._generation
-        await self._stop_adapters()
-        adapters: list = []
-        transcriber = self._build_transcriber()
-        for index, cfg in enumerate(feishu_instances(self._config.get(FEISHU_KEY)), start=1):
-            if not cfg.get("enabled") or not str(cfg.get("app_id") or "").strip():
-                continue
-            adapters.append(
-                FeishuAdapter(
-                    name=_instance_name(cfg, index),
-                    app_id=str(cfg.get("app_id") or ""),
-                    app_secret=str(cfg.get("app_secret") or ""),
-                    dispatcher=self.dispatcher,
-                    transcriber=transcriber,
-                )
-            )
+        """按当前配置重建适配器（先停旧的，再起新的）。
 
-        for adapter in adapters:
-            self.dispatcher.register(adapter)
-            self._tasks.append(
-                asyncio.create_task(
-                    self._start_adapter(adapter, generation),
-                    name=f"channel-start-{adapter.name}-{generation}",
+        全程持锁串行化：并发触发（如 ASR 保存与手动 reload 同时进来）不会让
+        两次重建的线程/事件循环收尾与新建交叠，从根上消除 lark-oapi 的
+        "This event loop is already running" 竞态。
+        """
+        async with self._apply_lock:
+            self._generation += 1
+            generation = self._generation
+            await self._stop_adapters()
+            adapters: list = []
+            transcriber = self._build_transcriber()
+            for index, cfg in enumerate(
+                feishu_instances(self._config.get(FEISHU_KEY)), start=1
+            ):
+                if not cfg.get("enabled") or not str(cfg.get("app_id") or "").strip():
+                    continue
+                adapters.append(
+                    FeishuAdapter(
+                        name=_instance_name(cfg, index),
+                        app_id=str(cfg.get("app_id") or ""),
+                        app_secret=str(cfg.get("app_secret") or ""),
+                        dispatcher=self.dispatcher,
+                        transcriber=transcriber,
+                    )
                 )
+
+            for adapter in adapters:
+                self.dispatcher.register(adapter)
+                self._tasks.append(
+                    asyncio.create_task(
+                        self._start_adapter(adapter, generation),
+                        name=f"channel-start-{adapter.name}-{generation}",
+                    )
+                )
+            logger.info(
+                "channel.manager.apply",
+                generation=generation,
+                adapters=[a.name for a in adapters],
             )
-        logger.info(
-            "channel.manager.apply",
-            generation=generation,
-            adapters=[a.name for a in adapters],
-        )
-        return self.status()
+            return self.status()
 
     async def _start_adapter(self, adapter, generation: int) -> None:
         try:

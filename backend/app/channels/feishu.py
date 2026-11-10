@@ -131,8 +131,18 @@ class FeishuAdapter(ChannelAdapter):
             # Client.start() 卡在 _select() 的无限 sleep 里，只关连接不会返回，
             # 必须把线程自己的循环停掉。
             loop.call_soon_threadsafe(loop.stop)
-        if thread.is_alive():
-            await asyncio.get_running_loop().run_in_executor(None, thread.join, 5.0)
+        await self._await_thread_teardown(thread)
+
+    async def _await_thread_teardown(self, thread: threading.Thread) -> None:
+        """收尾屏障：等旧适配器线程（连同它的事件循环）彻底退出。
+
+        热重启（stop→apply 串行锁内）必须把旧线程/旧 loop 的 teardown 完成
+        作为新线程建环的前置条件，否则新线程 set_event_loop 时旧循环仍被占用，
+        触发 lark-oapi 的 "This event loop is already running" 竞态。
+        """
+        if thread is None or not thread.is_alive():
+            return
+        await asyncio.get_running_loop().run_in_executor(None, thread.join, 5.0)
 
     # ---------- 线程内运行 ----------
 
