@@ -9,6 +9,11 @@ import { formatTime, pretty } from '../utils'
 const message = useMessage()
 const router = useRouter()
 
+// 渠道名可能是 feishu / feishu_2 / feishu_3 …，只要以 feishu 开头都算飞书来源
+function isFeishuChannel(channel) {
+  return !!channel && channel.indexOf('feishu') === 0
+}
+
 const sessions = ref([])
 const currentId = ref(null)
 const entries = ref([])
@@ -173,7 +178,19 @@ onMounted(loadSessions)
           @click="openSession(item.id)"
         >
           <div class="session-body">
-            <div class="session-title">{{ item.title || '未命名对话' }}</div>
+            <div class="session-title-row">
+              <div class="session-title">{{ item.title || '未命名对话' }}</div>
+              <n-tag
+                v-if="isFeishuChannel(item.channel)"
+                size="tiny"
+                type="primary"
+                class="source-badge"
+                >飞书</n-tag
+              >
+              <span v-if="isFeishuChannel(item.channel)" class="source-group">{{
+                item.channel_label || item.channel_ref
+              }}</span>
+            </div>
             <div class="session-time">{{ formatTime(item.updated_at) }}</div>
           </div>
           <n-popconfirm

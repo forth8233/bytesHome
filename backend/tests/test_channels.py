@@ -49,8 +49,8 @@ class FakeChat:
         self.calls: list[tuple] = []
         self.result = result or {"reply": "已关闭客厅灯。", "session_id": 7}
 
-    async def chat(self, member, text, session_id=None):
-        self.calls.append((member.id, text, session_id))
+    async def chat(self, member, text, session_id=None, *, channel="", channel_ref=""):
+        self.calls.append((member.id, text, session_id, channel, channel_ref))
         return dict(self.result)
 
 
@@ -275,6 +275,8 @@ async def test_bound_account_routes_to_chat_service(client) -> None:
 
     assert chat.calls[0][1] == "关客厅灯"
     assert chat.calls[0][2] is None  # 首轮没有历史会话
+    assert chat.calls[0][3] == "feishu"  # 来源渠道传入 ChatService
+    assert chat.calls[0][4] == "oc_test_chat"  # 渠道内会话标识
     assert adapter.sent[-1][1].text == "已关闭客厅灯。"
     assert dispatcher.counters["handled"] == 1
 
@@ -357,7 +359,7 @@ async def test_chat_failure_is_reported_to_user(client) -> None:
     await _bind("ou_fail")
 
     class BoomChat:
-        async def chat(self, member, text, session_id=None):
+        async def chat(self, member, text, session_id=None, *, channel="", channel_ref=""):
             raise RuntimeError("llm exploded")
 
     dispatcher, adapter = build_dispatcher(chat=BoomChat())

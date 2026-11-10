@@ -205,7 +205,13 @@ class ChannelDispatcher:
 
         self._busy.add(key)
         try:
-            result = await self._chat.chat(member, text, self._sessions.get(key))
+            result = await self._chat.chat(
+                member,
+                text,
+                self._sessions.get(key),
+                channel=msg.channel,
+                channel_ref=msg.chat_id,
+            )
         except Exception as exc:  # noqa: BLE001 - 如实告知，不吞异常
             self.counters["failed"] += 1
             logger.exception("channel.chat_failed", channel=msg.channel, member_id=member.id)

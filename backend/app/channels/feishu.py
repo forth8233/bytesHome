@@ -17,6 +17,9 @@ DEDUPE_TTL_SECONDS = 600
 CONNECT_WAIT_SECONDS = 30.0
 # 按提案号缓存已发出的卡片 JSON（点击按钮后在回调应答里原地更新），上限防撑内存
 CARD_CACHE_LIMIT = 200
+# 群名解析结果的缓存时长，避免每次刷新对话列表都打飞书 API
+CHAT_NAME_TTL_SECONDS = 3600
+CHAT_NAME_CACHE_LIMIT = 500
 
 # SDK 1.7.5 的 ws 客户端把卡片回调帧（type=card）直接丢弃，而事件分发只看
 # payload 里的 header.event_type，与帧头无关。把 CARD 帧的 type 头改写成 event
@@ -69,6 +72,7 @@ class FeishuAdapter(ChannelAdapter):
         self._connect_error: str | None = None
         self._seen: dict[str, float] = {}
         self._proposal_cards: dict[int, dict[str, Any]] = {}
+        self._chat_names: dict[str, tuple[float, str]] = {}
         self._started_at: float | None = None
         self._sent = 0
         self._failed = 0
@@ -498,6 +502,43 @@ class FeishuAdapter(ChannelAdapter):
             return False
         self._seen[message_id] = now
         return True
+
+    async def chat_name(self, chat_id: str) -> str | None:
+        """按 chat_id 取群名（用于对话列表标来源）；带 TTL 缓存，失败返回 None 不抛出。"""
+        if not chat_id or self._api is None:
+            return None
+        now = time.monotonic()
+        cached = self._chat_names.get(chat_id)
+        if cached and now - cached[0] < CHAT_NAME_TTL_SECONDS:
+            return cached[1]
+        try:
+            from lark_oapi.api.im.v1.model.get_chat_request import GetChatRequest
+
+            request = GetChatRequest.builder().chat_id(chat_id).build()
+            response = await asyncio.get_running_loop().run_in_executor(
+                None, self._api.im.v1.chat.get, request
+            )
+        except Exception:  # noqa: BLE001 - 失败只记日志，回退给调用方
+            logger.debug("channel.feishu.chat_name_failed", chat_id=chat_id)
+            return None
+        code = getattr(response, "code", 0)
+        data = getattr(response, "data", None)
+        name = str(getattr(data, "name", "") or "").strip() if data else ""
+        if code not in (0, None) or not name:
+            return None
+        # 只在成功时写缓存，避免把瞬时失败长期计入
+        if len(self._chat_names) >= CHAT_NAME_CACHE_LIMIT:
+            expired = [
+                k
+                for k, v in self._chat_names.items()
+                if now - v[0] >= CHAT_NAME_TTL_SECONDS
+            ]
+            for key in expired:
+                self._chat_names.pop(key, None)
+            if len(self._chat_names) >= CHAT_NAME_CACHE_LIMIT:
+                self._chat_names.pop(next(iter(self._chat_names)), None)
+        self._chat_names[chat_id] = (now, name)
+        return name
 
     # ---------- 出站 ----------
 

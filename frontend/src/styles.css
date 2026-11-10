@@ -205,6 +205,32 @@ body {
   white-space: nowrap;
 }
 
+.session-title-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.session-title-row .session-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-title-row .source-badge {
+  flex: none;
+}
+
+.source-group {
+  flex: none;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
 .session-time {
   margin-top: 2px;
   font-size: 11px;

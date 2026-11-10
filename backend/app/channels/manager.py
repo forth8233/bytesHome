@@ -45,8 +45,22 @@ class ChannelManager:
             proposals=proposals,
             config=config,
         )
+        self._wire_label_resolver()
         self._tasks: list[asyncio.Task] = []
         self._generation = 0
+
+    def _wire_label_resolver(self) -> None:
+        """把「飞书群 → 群名」解析器接到 ChatService，供会话列表展示来源徽标。"""
+
+        async def _resolve(channel: str, channel_ref: str) -> str | None:
+            if not channel.startswith("feishu") or not channel_ref:
+                return None
+            adapter = self.dispatcher.adapters().get(channel)
+            if adapter is None:
+                return None
+            return await adapter.chat_name(channel_ref)
+
+        self._chat.set_channel_label_resolver(_resolve)
 
     # ---------- 生命周期 ----------
 

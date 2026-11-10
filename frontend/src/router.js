@@ -6,6 +6,7 @@ import LoginView from './views/LoginView.vue'
 import MemoriesView from './views/MemoriesView.vue'
 import ProposalsView from './views/ProposalsView.vue'
 import ScenesView from './views/ScenesView.vue'
+import TimersView from './views/TimersView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -15,6 +16,7 @@ const router = createRouter({
     { path: '/chat', component: ChatView },
     { path: '/proposals', component: ProposalsView },
     { path: '/scenes', component: ScenesView },
+    { path: '/timers', component: TimersView },
     { path: '/config', component: ConfigView },
     { path: '/memories', component: MemoriesView },
   ],

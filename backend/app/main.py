@@ -26,6 +26,7 @@ from app.api.routers import (
     scenes,
     sse,
     stats,
+    timers,
     voice,
 )
 from app.channels.manager import ChannelManager, ChannelNotifier
@@ -37,6 +38,7 @@ from app.events.bus import EventBus
 from app.events.log_sink import EventLogSink
 from app.events.pipeline import EventPipeline
 from app.fastpath.engine import FastPathEngine
+from app.fastpath.scheduler import ScheduleRunner
 from app.ha.adapter import HAAdapter
 from app.llm.client import LLMClient
 from app.notify.notifier import HANotifier, MultiNotifier
@@ -129,6 +131,12 @@ async def lifespan(app: FastAPI):
     await reasoner.start()
     await channel_manager.start()
     sweeper = asyncio.create_task(proposal_service.run_sweeper(), name="proposal-sweeper")
+    schedule_runner = ScheduleRunner(
+        session_factory=SessionFactory,
+        adapter=adapter,
+        guard=guard,
+    )
+    sched_task = asyncio.create_task(schedule_runner.run(), name="scheduled-task-runner")
 
     app.state.config_service = config
     app.state.ha_adapter = adapter
@@ -142,6 +150,7 @@ async def lifespan(app: FastAPI):
     app.state.fast_path = fast_path
     app.state.reasoner = reasoner
     app.state.channel_manager = channel_manager
+    app.state.schedule_runner = schedule_runner
     logger.info("app.started", auto_create_schema=settings.auto_create_schema)
     try:
         yield
@@ -149,6 +158,11 @@ async def lifespan(app: FastAPI):
         sweeper.cancel()
         try:
             await sweeper
+        except asyncio.CancelledError:
+            pass
+        sched_task.cancel()
+        try:
+            await sched_task
         except asyncio.CancelledError:
             pass
         await channel_manager.stop()
@@ -220,6 +234,7 @@ def create_app() -> FastAPI:
     application.include_router(events.router)
     application.include_router(memories.router)
     application.include_router(audit.router)
+    application.include_router(timers.router)
     application.include_router(chat.router)
     application.include_router(channels.router)
     application.include_router(fastpath.router)

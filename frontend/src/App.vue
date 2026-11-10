@@ -13,6 +13,7 @@ const dark = ref(localStorage.getItem('ha_theme') === 'dark')
 const navItems = [
   { path: '/chat', label: '聊天' },
   { path: '/scenes', label: '场景与自动化' },
+  { path: '/timers', label: '定时任务' },
   { path: '/proposals', label: '提案审批' },
   { path: '/config', label: '配置' },
   { path: '/memories', label: '记忆' },

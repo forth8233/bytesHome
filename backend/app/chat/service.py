@@ -122,11 +122,23 @@ class ChatService:
         self._slow_limit = max(0, int(slow_path_limit_per_minute))
         self._slow_calls: dict[int, deque[float]] = {}
         self._limit_lock = asyncio.Lock()
+        # 群名/来源渠道显示解析器：(channel, ref) -> label | None，可空
+        self._channel_label_resolver = None
+
+    def set_channel_label_resolver(self, resolver) -> None:
+        """挂接渠道专属解析器（如飞书按 chat_id 取群名）。"""
+        self._channel_label_resolver = resolver
 
     # ---------- 对话 ----------
 
     async def chat(
-        self, member: Member, message: str, session_id: int | None = None
+        self,
+        member: Member,
+        message: str,
+        session_id: int | None = None,
+        *,
+        channel: str = "",
+        channel_ref: str = "",
     ) -> dict[str, Any]:
         message = message.strip()
         if not message:
@@ -135,11 +147,31 @@ class ChatService:
 
         async with self._session_factory() as session:
             if session_id is None:
-                chat_session = ChatSession(
-                    member_id=member.id, title=message[:30], updated_at=utcnow()
-                )
-                session.add(chat_session)
-                await session.flush()
+                # 有渠道来源（如飞书）时，优先复用该成员在该渠道会话里已有的会话，
+                # 避免每来一条新消息都新建一个对话。
+                if channel and channel_ref:
+                    chat_session = await session.scalar(
+                        select(ChatSession)
+                        .where(
+                            ChatSession.member_id == member.id,
+                            ChatSession.channel == channel,
+                            ChatSession.channel_ref == channel_ref,
+                        )
+                        .order_by(ChatSession.updated_at.desc())
+                        .limit(1)
+                    )
+                else:
+                    chat_session = None
+                if chat_session is None:
+                    chat_session = ChatSession(
+                        member_id=member.id,
+                        title=message[:30],
+                        channel=channel or "",
+                        channel_ref=channel_ref or "",
+                        updated_at=utcnow(),
+                    )
+                    session.add(chat_session)
+                    await session.flush()
                 session_id = chat_session.id
             else:
                 chat_session = await session.get(ChatSession, session_id)
@@ -779,11 +811,34 @@ class ChatService:
             {
                 "id": row.id,
                 "title": row.title,
+                "channel": row.channel or "",
+                "channel_ref": row.channel_ref or "",
+                "channel_label": await self._resolve_channel_label(
+                    row.channel or "", row.channel_ref or ""
+                ),
                 "created_at": _iso(row.created_at),
                 "updated_at": _iso(row.updated_at),
             }
             for row in rows
         ]
+
+    async def _resolve_channel_label(self, channel: str, channel_ref: str) -> str:
+        """按来源渠道解析成可读标识（如飞书按 chat_id 取群名）；失败回退原始 ref。"""
+        resolver = self._channel_label_resolver
+        if (
+            resolver is not None
+            and channel
+            and channel_ref
+        ):
+            try:
+                label = await resolver(channel, channel_ref)
+                if label:
+                    return str(label)
+            except Exception:  # noqa: BLE001 - 解析失败不影响列表
+                logger.exception(
+                    "chat.channel_label_failed", channel=channel, channel_ref=channel_ref
+                )
+        return channel_ref
 
     async def create_session(self, member_id: int, title: str = "新会话") -> dict[str, Any]:
         async with self._session_factory() as session:
@@ -798,6 +853,11 @@ class ChatService:
         return {
             "id": row.id,
             "title": row.title,
+            "channel": row.channel or "",
+            "channel_ref": row.channel_ref or "",
+            "channel_label": await self._resolve_channel_label(
+                row.channel or "", row.channel_ref or ""
+            ),
             "created_at": _iso(row.created_at),
             "updated_at": _iso(row.updated_at),
         }

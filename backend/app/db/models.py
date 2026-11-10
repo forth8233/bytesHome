@@ -191,6 +191,9 @@ class ChatSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(128), default="")
+    # 会话来源渠道："" = 网页/对话界面，feishu 等 = IM 渠道；channel_ref 是渠道内会话标识
+    channel: Mapped[str] = mapped_column(String(16), default="", index=True)
+    channel_ref: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -368,3 +371,40 @@ class ChannelIdentity(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ScheduledTask(Base):
+    """语音/对话中解析出的定时任务（单次）。"""
+
+    __tablename__ = "scheduled_task"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    member_id: Mapped[int | None] = mapped_column(
+        ForeignKey("member.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))  # relative/absolute/fuzzy/duration
+    text: Mapped[str] = mapped_column(String(255))  # 原始指令文本
+    summary: Mapped[str] = mapped_column(String(128))  # 用户可读描述
+    actions_json: Mapped[str] = mapped_column(Text, default="[]")  # 规范化动作
+    run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/cancelled/fired/failed
+    result_text: Mapped[str] = mapped_column(Text, default="")
+    fired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = _ts()
+
+
+class ScheduledRun(Base):
+    """定时任务执行记录（审查）。"""
+
+    __tablename__ = "scheduled_run"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("scheduled_task.id", ondelete="CASCADE"), index=True
+    )
+    member_id: Mapped[int | None] = mapped_column(
+        ForeignKey("member.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(16))  # ok/failed/skipped
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")  # 逐条结果/错误/guard 拒绝原因
+    fired_at: Mapped[datetime] = _ts()

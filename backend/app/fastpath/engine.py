@@ -15,6 +15,7 @@ from app.db.models import (
     EntityAlias,
     IntentRule,
     MemberEntityPermission,
+    ScheduledTask,
     VoiceDeviceProfile,
     VoiceGroupList,
     VoiceLexiconEntry,
@@ -29,6 +30,7 @@ from app.fastpath.emotional import (
 )
 from app.fastpath.grammar import UNIT_BY_DOMAIN, ParsedIntent, parse_choice, parse_intent
 from app.fastpath.normalize import normalize
+from app.fastpath.schedule import ScheduleSpec, parse_schedule
 from app.fastpath.rules import SceneRule, match_scene, scene_from_row
 from app.fastpath.voice import VoiceLexicon, VoiceParser, VoiceResult
 from app.fastpath.voice_lexicon import LexiconEntry
@@ -364,6 +366,22 @@ class FastPathEngine:
             )
             return self._finish(result, started)
 
+        spec = parse_schedule(text)
+        if spec is not None:
+            logger.info(
+                "fast_path.schedule_hit",
+                kind=spec.kind,
+                summary=spec.summary,
+                action_text=spec.action_text,
+                text=text[:80],
+            )
+            result = await self._handle_schedule(
+                member, spec, states, resolver, view_patterns, settings, key
+            )
+            if result is not None:
+                return self._finish(result, started)
+            self._counters["schedule_unresolved"] += 1
+
         if self._voice is not None and settings.get("voice_enabled", True):
             try:
                 voice_result = self._voice.parse(
@@ -601,6 +619,192 @@ class FastPathEngine:
             "fast_path" if resolution.status == "ok" or voice_hit else "slow_path"
         )
         return payload
+
+    # ---------- 定时 ----------
+
+    async def _handle_schedule(
+        self,
+        member,
+        spec: ScheduleSpec,
+        states: dict[str, dict],
+        resolver: EntityResolver,
+        view_patterns: list[str] | None,
+        settings: dict[str, Any],
+        key: tuple[int, int],
+    ) -> RouteResult | None:
+        """快路径命中定时：把剥离时间后的动作解析为规范化动作落库，由调度器到时触发。"""
+        if not self._allow_rate(member.id, int(settings["member_rate_limit_per_minute"])):
+            self._counters["rate_limited"] += 1
+            return RouteResult(status="denied", reply="操作太频繁了，请稍后再试。")
+
+        actions = await self._resolve_schedule_actions(
+            spec, states, resolver, view_patterns, member
+        )
+        if not actions:
+            self._fallback_reasons["schedule_no_action"] += 1
+            logger.warning(
+                "fast_path.schedule_no_action",
+                text=spec.title[:80],
+                action_text=spec.action_text,
+            )
+            return None
+
+        # 定时动作无人工确认：命中即是「定时预约」，先过一遍安全策略，高风险直接不放行预约
+        guard = await self._guard.check(
+            actions, member=member, source="scheduled_task"
+        )
+        if not guard.passed:
+            reason = "; ".join(guard.reasons)[:300]
+            await self._audit(
+                member,
+                "scheduled_task.denied",
+                target=spec.title,
+                detail={"reasons": guard.reasons, "actions": actions},
+            )
+            self._counters["denied"] += 1
+            return RouteResult(
+                status="denied",
+                reply=f"该定时被安全策略拦截：{reason}。可以换一个说法试试。",
+            )
+        if guard.requires_confirm:
+            await self._audit(
+                member,
+                "scheduled_task.denied",
+                target=spec.title,
+                detail={"reasons": guard.reasons, "actions": actions},
+            )
+            return RouteResult(
+                status="denied",
+                reply="该动作需要人工确认，暂不能设为定时。",
+            )
+
+        if spec.kind == "duration":
+            # 时长语义：立即执行动作 + 落一条到时自动关
+            intent = ParsedIntent(kind="control", original=spec.title)
+            executed = await self._execute(
+                member, intent, actions, key, reply=f"已开始，{spec.summary}。"
+            )
+            if executed.status != "executed":
+                return executed
+            inverse = self._inverse_actions(actions)
+            if inverse:
+                await self._persist_scheduled_task(
+                    member, spec, inverse, status_note="发起时已立即执行"
+                )
+            return executed
+
+        task_id = await self._persist_scheduled_task(member, spec, actions)
+        self._counters["scheduled"] += 1
+        return RouteResult(
+            status="executed",
+            reply=self._schedule_reply(spec, task_id),
+            actions=[],
+        )
+
+    async def _resolve_schedule_actions(
+        self,
+        spec: ScheduleSpec,
+        states: dict[str, dict],
+        resolver: EntityResolver,
+        view_patterns: list[str] | None,
+        member,
+    ) -> list[dict[str, Any]]:
+        """把剥离时间后的动作文本解析为规范化动作。先快路径，再回退语音解析。"""
+        intent = parse_intent(spec.action_text)
+        if intent is not None and intent.service:
+            if intent.kind == "control":
+                resolution = resolver.resolve(
+                    intent.target,
+                    intent.domain,
+                    states,
+                    explicit_all=intent.explicit_all,
+                    member=member,
+                    view_patterns=view_patterns,
+                    want_control=True,
+                )
+                entities = self._filter_already_satisfied(
+                    intent, resolution.entities, states, settings=self._settings()
+                ) if resolution.status == "ok" else resolution.entities
+                if resolution.status == "ok" and entities:
+                    return self._build_actions(intent, entities)
+        if self._voice is not None and self._settings().get("voice_enabled", True):
+            try:
+                vr = self._voice.parse(
+                    spec.action_text,
+                    states=states,
+                    resolver=resolver,
+                    member=member,
+                    view_patterns=view_patterns,
+                    settings=self._settings(),
+                )
+            except Exception:  # noqa: BLE001 - 语音解析失败即放弃定时化
+                logger.exception("fast_path.schedule_voice_failed")
+                vr = None
+            if vr is not None and vr.actions:
+                return vr.actions
+        return []
+
+    def _inverse_actions(
+        self, actions: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """同一实体的开/关反转，用于时长定时到时自动回切。取其 domain/service 反转。"""
+        inverse = []
+        for action in actions:
+            service = str(action["service"])
+            domain = str(action["domain"])
+            flipped = (
+                {"turn_on": "turn_off", "open_cover": "close_cover", "unlock": "lock"}.get(
+                    service
+                )
+            )
+            if flipped:
+                inverse.append(
+                    {
+                        "domain": domain,
+                        "service": flipped,
+                        "entity_id": action.get("entity_id"),
+                        "data": dict(action.get("data") or {}),
+                    }
+                )
+        return inverse
+
+    async def _persist_scheduled_task(
+        self,
+        member,
+        spec: ScheduleSpec,
+        actions: list[dict[str, Any]],
+        *,
+        status_note: str = "",
+    ) -> int:
+        summary = spec.summary
+        run_at = spec.run_at or spec.auto_run_at
+        if status_note:
+            summary = f"{summary}（{status_note}）"
+        async with self._session_factory() as session:
+            task = ScheduledTask(
+                member_id=member.id,
+                kind=spec.kind,
+                text=spec.title,
+                summary=summary or spec.title,
+                actions_json=json.dumps(actions, ensure_ascii=False),
+                run_at=run_at,
+                status="pending",
+            )
+            session.add(task)
+            await session.commit()
+            task_id = task.id
+        await self._audit(
+            member,
+            "scheduled_task.create",
+            target=spec.title,
+            detail={"task_id": task_id, "kind": spec.kind, "summary": summary},
+        )
+        return task_id
+
+    def _schedule_reply(self, spec: ScheduleSpec, task_id: int) -> str:
+        if spec.kind == "relative":
+            return f"已设置定时：{spec.summary}后{spec.action_text or '执行'}。"
+        return f"已设置定时：{spec.summary} {spec.action_text or '执行'}。"
 
     # ---------- 控制 ----------
 
