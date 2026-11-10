@@ -458,6 +458,7 @@ class ChatService:
             "tool_results": tool_trace,
             "proposal": proposal,
             "draft": draft,
+            "created_at": _iso(utcnow()),
             "route": "slow_path",
             "route_status": route_status,
             "latency_ms": latency_ms,
@@ -493,6 +494,7 @@ class ChatService:
             "tool_results": tool_trace,
             "proposal": route_result.proposal,
             "draft": None,
+            "created_at": _iso(utcnow()),
             **route_meta,
             "candidates": route_result.candidates,
         }

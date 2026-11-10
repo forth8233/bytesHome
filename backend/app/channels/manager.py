@@ -50,15 +50,33 @@ class ChannelManager:
         self._generation = 0
 
     def _wire_label_resolver(self) -> None:
-        """把「飞书群 → 群名」解析器接到 ChatService，供会话列表展示来源徽标。"""
+        """把「飞书渠道 → 可读名称」解析器接到 ChatService，供会话列表展示来源。
+
+        展示优先级：渠道备注名(remark) > 飞书群名(API) > 渠道实例名(feishu_2)，
+        绝不回退成 chat_id 这类对用户不直观的标识。
+        """
 
         async def _resolve(channel: str, channel_ref: str) -> str | None:
-            if not channel.startswith("feishu") or not channel_ref:
+            if not channel.startswith("feishu"):
                 return None
-            adapter = self.dispatcher.adapters().get(channel)
-            if adapter is None:
-                return None
-            return await adapter.chat_name(channel_ref)
+            # 优先：渠道实例的备注名（用户在配置里起的名字，如「客厅群」）
+            for index, cfg in enumerate(
+                feishu_instances(self._config.get(FEISHU_KEY)), start=1
+            ):
+                if _instance_name(cfg, index) == channel:
+                    remark = str(cfg.get("remark") or "").strip()
+                    if remark:
+                        return remark
+                    break
+            # 没有备注名时：飞书群名（API，带 TTL 缓存；失败/无名称则用实例名）
+            if channel_ref:
+                adapter = self.dispatcher.adapters().get(channel)
+                if adapter is not None:
+                    name = await adapter.chat_name(channel_ref)
+                    if name:
+                        return name
+            # 最后回退到实例名本身（feishu / feishu_2 …），直观且不占空间
+            return channel
 
         self._chat.set_channel_label_resolver(_resolve)
 

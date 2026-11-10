@@ -50,6 +50,7 @@ async function openSession(id) {
       proposal: null,
       draft: null,
       confirmed: false,
+      created_at: item.created_at,
     }))
     scrollToBottom()
   } catch (error) {
@@ -84,7 +85,7 @@ async function removeSession(item) {
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
-  entries.value.push({ role: 'user', content: text })
+  entries.value.push({ role: 'user', content: text, created_at: new Date().toISOString() })
   input.value = ''
   sending.value = true
   scrollToBottom()
@@ -98,6 +99,7 @@ async function send() {
       role: 'assistant',
       content: data.reply,
       tool_calls: data.tool_results || [],
+      created_at: data.created_at || new Date().toISOString(),
       route:
         data.route === 'fast_path'
           ? {
@@ -125,6 +127,7 @@ async function send() {
       role: 'assistant',
       content: `请求失败：${errorMessage(error)}`,
       tool_calls: [],
+      created_at: new Date().toISOString(),
       proposal: null,
       draft: null,
       confirmed: false,
@@ -330,6 +333,7 @@ onMounted(loadSessions)
                 </span>
               </div>
             </n-card>
+            <div class="bubble-time" v-if="entry.created_at">{{ formatTime(entry.created_at) }}</div>
           </div>
         </div>
       </div>
