@@ -769,6 +769,21 @@ async function loadChannels() {
   })
 }
 
+// 保存/重载后，长连接是异步建立的：后端 apply() 返回的瞬间适配器还在「连接中」。
+// 只在拉取状态、不动表单（避免把正在编辑的密钥字段清空），轮询几秒直到连上或报错。
+async function settleChannelStatus(timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const { data } = await api.get('/channels')
+    channelStatus.value = data
+    const reachable = data?.feishu?.instances || []
+    // 任一飞书实例处于未定态（running 且未连上 且无 error）就继续等
+    const pending = reachable.some((it) => it.running && !it.connected && !it.error)
+    if (!pending) return
+    await new Promise((resolve) => setTimeout(resolve, 800))
+  }
+}
+
 function addFeishuInstance() {
   feishuInstances.value.push({
     name: '',
@@ -803,6 +818,7 @@ async function saveFeishuChannels() {
     channelStatus.value = data
     message.success('已保存，正在重连长连接')
     await loadChannels()
+    await settleChannelStatus()
   } catch (error) {
     message.error(errorMessage(error))
   } finally {
@@ -817,6 +833,7 @@ async function reloadChannels() {
     channelStatus.value = data
     message.success('已重新加载渠道')
     await loadChannels()
+    await settleChannelStatus()
   } catch (error) {
     message.error(errorMessage(error))
   } finally {
@@ -838,6 +855,7 @@ async function saveAsrConfig() {
     channelStatus.value = data
     message.success(asrForm.enabled ? '语音识别已启用' : '语音识别已关闭')
     await loadChannels()
+    await settleChannelStatus()
   } catch (error) {
     message.error(errorMessage(error))
   } finally {
