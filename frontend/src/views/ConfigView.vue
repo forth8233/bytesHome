@@ -777,9 +777,10 @@ async function settleChannelStatus(timeoutMs = 6000) {
     const { data } = await api.get('/channels')
     channelStatus.value = data
     // 徽标渲染源是 channels[]（按 name 匹配），不是 feishu.instances（那是配置列表，无当场状态）
+    // 未定态 = 既没连上也没报错（连接中 或 未运行 都算），连上/报错即视为落定
     const channels = data?.channels || []
     const pending = channels.some(
-      (it) => it.name?.startsWith('feishu') && it.running && !it.connected && !it.error,
+      (it) => it.name?.startsWith('feishu') && !it.connected && !it.error,
     )
     if (!pending) return
     await new Promise((resolve) => setTimeout(resolve, 800))
