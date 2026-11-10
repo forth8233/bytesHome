@@ -23,15 +23,17 @@ REMOTE_BASE = "/home/tantron/bytesHome"
 
 
 def main() -> int:
-    service = "agent"
-    files = []
-    for a in sys.argv[1:]:
-        if a == "--service":
-            service = "web"  # web = frontend (nginx dist), agent = backend
-        elif a.startswith("--service="):
-            service = a.split("=", 1)[1]
-        elif not a.startswith("--"):
-            files.append(a)
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--service", choices=["agent", "web"], default="agent",
+        help="which compose service to rebuild after upload (agent=backend, web=frontend nginx)",
+    )
+    parser.add_argument("files", nargs="+", help="local file paths to upload")
+    args = parser.parse_args()
+    service = args.service
+    files = args.files
     if not files:
         print(__doc__)
         return 2
