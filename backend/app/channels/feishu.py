@@ -25,45 +25,6 @@ CHAT_NAME_CACHE_LIMIT = 500
 # payload 里的 header.event_type，与帧头无关。把 CARD 帧的 type 头改写成 event
 # 再交回原实现，卡片回调就能落进 register_p2_card_action_trigger 注册的处理器
 # ——这是免公网的按钮回调方案。模块级只打一次，适配器反复热重启不会叠加包装。
-# 与 SDK 事件循环相关的补丁：适配器反复热重启不会叠加包装。
-_ws_loop_patched = False
-
-
-def _patch_ws_event_loop(ws_client_module) -> None:
-    """把 lark-oapi ws Client 拉到的响应事件循环改成「每线程一个」。
-
-    lark-oapi 1.7.5 的 _current_loop() 返回一个**模块级全局事件循环**，在模块
-    首次导入时就抓住（Python 3.10 之前拿主线程的 asyncio 循环占位）。第一个
-    线程的 Client.start() 用 loop.run_until_complete(_select()) 把这个全局循环
-    跑起来（永不返回）；此后每次热重启都在新线程里再 start()，拿到的还是
-    同一个**仍在运行**的全局循环，run_until_complete 必抛
-    "This event loop is already running"（表现为飞书渠道「连接异常」）。
-
-    每个飞书适配器都在自己的 daemon 线程里跑 Client.start()（见 _run_client），
-    所以改成按线程缓存各自的事件循环，热重启就再也不会撞上同一条在跑的循环。
-    幂等：第一次应用后置哨兵，后续热重启直接跳过。
-    """
-    global _ws_loop_patched
-    if _ws_loop_patched:
-        return
-    loop_local = threading.local()
-
-    def _current_loop():
-        loop = getattr(loop_local, "loop", None)
-        if loop is not None:
-            return loop
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        loop_local.loop = loop
-        return loop
-
-    ws_client_module._current_loop = _current_loop
-    _ws_loop_patched = True
-
-
 _ws_card_patched = False
 
 
@@ -87,9 +48,13 @@ def _patch_ws_card_frames(ws_client_module) -> None:
 class FeishuAdapter(ChannelAdapter):
     """飞书自建应用长连接适配器（WebSocket，无需公网 IP）。
 
-    lark-oapi 的 ws Client 是同步阻塞的，并且默认抓模块级事件循环
-    （被 _patch_ws_event_loop 补丁成每线程一个），所以它必须在独立守护线程里
-    跑自己的循环；主应用的事件循环只通过 dispatcher.submit() 收消息。
+    lark-oapi 的 ws Client 是同步阻塞的，它的 start()/_select() 直接读 SDK
+    **模块级全局事件循环**（ws_client_module.loop）。热重启时若新线程复用这条
+    仍在运行的全局循环，run_until_complete 必抛 "This event loop is already
+    running"（表现为飞书渠道「连接异常」）。每个适配器在自己的 daemon 线程里
+    跑 Client.start()（见 _run_client），因此 _run_client 里把 SDK 的模块级
+    loop 显式重定向成本线程新建的独立循环，热重启各自成环互不干扰。
+    主应用的事件循环只通过 dispatcher.submit() 收消息。
     """
 
     def __init__(
@@ -195,16 +160,19 @@ class FeishuAdapter(ChannelAdapter):
             self._ready.set()
             return
 
-        # lark-oapi 的 _current_loop() 原本返回**模块级全局事件循环**，第一个
-        # 线程 start() 后这条全局循环就一直 running，热重启的新线程再 start() 会
-        # 撞上同一条在跑的循环，抛 "This event loop is already running"。这里先
-        # 把 SDK 的 _current_loop 换成「每线程一个循环」，再在自己线程里显式建
-        # 环，让每个适配器线程用各自独立的循环（幂等，反复热重启不叠加）。
-        _patch_ws_event_loop(ws_client_module)
+        # lark-oapi 1.7.5 的 start()/_select() 直接读**模块级全局事件循环**
+        # ws.client.loop（无 _current_loop 这样的抽象），第一个线程 start() 后该
+        # 全局循环一直 running；热重启的新线程再 start() 又撞上同一条还在跑的
+        # 循环，run_until_complete 必抛 "This event loop is already running"。
+        # 这里在**本线程自己新建**的事件循环上，把 SDK 模块级 loop 重定向到它，
+        # 让每个适配器线程 start() 时用各自独立的循环（热重启各自成环互不干扰）。
+        _patch_ws_card_frames(ws_client_module)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._thread_loop = loop
-        _patch_ws_card_frames(ws_client_module)
+        # 关键：stock start() 引用的是模块里的全局 loop 变量（非 _current_loop()），
+        # 必须左值重绑定成当前线程的 loop，热重启才会拿新线程自己的循环。
+        ws_client_module.loop = loop
 
         handler = (
             EventDispatcherHandler.builder("", "")
