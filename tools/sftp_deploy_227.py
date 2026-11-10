@@ -23,7 +23,15 @@ REMOTE_BASE = "/home/tantron/bytesHome"
 
 
 def main() -> int:
-    files = [a for a in sys.argv[1:] if not a.startswith("--")]
+    service = "agent"
+    files = []
+    for a in sys.argv[1:]:
+        if a == "--service":
+            service = "web"  # web = frontend (nginx dist), agent = backend
+        elif a.startswith("--service="):
+            service = a.split("=", 1)[1]
+        elif not a.startswith("--"):
+            files.append(a)
     if not files:
         print(__doc__)
         return 2
@@ -47,13 +55,15 @@ def main() -> int:
             print(f"upload {local} -> {dst}")
             sftp.put(local, dst + ".new")
             sftp.posix_rename(dst + ".new", dst)
-        # 2. rebuild + restart agent, wait for healthy
+        # 2. rebuild + restart selected service, wait for it to be running/healthy
+        ctn = "home-agent" if service == "agent" else "home-agent-web"
         cmds = "\n".join([
             "cd /home/tantron/bytesHome",
-            "docker compose build agent 2>&1 | tail -5",
-            "docker compose up -d agent 2>&1 | tail -5",
+            f"docker compose build {service} 2>&1 | tail -5",
+            f"docker compose up -d {service} 2>&1 | tail -5",
             "for i in $(seq 1 40); do "
-            "  s=$(docker inspect --format '{{.State.Health.Status}}' home-agent 2>/dev/null); "
+            f"  s=$(docker inspect --format '{{{{.State.Health.Status}}}}' {ctn} 2>/dev/null); "
+            "  [ -z \"$s\" ] || [ \"$s\" = \"<nil>\" ] && { echo \"health=running(no-tcx)\"; break; }; "
             "  echo \"health=$s\"; [ \"$s\" = \"healthy\" ] && break; sleep 3; done",
         ])
         print("--- remote build/restart ---")
