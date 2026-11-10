@@ -1,8 +1,17 @@
 import base64
 import hashlib
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def app_version() -> str:
+    """程序版本单一真源：读取 pyproject.toml 的 [project] version。"""
+    try:
+        return _pkg_version("home-agent")
+    except PackageNotFoundError:
+        return "0.1.0"
 
 
 class Settings(BaseSettings):

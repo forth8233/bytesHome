@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import text
 
 from app.api.deps import ConfigDep, DbSession, HADep
+from app.core.config import app_version
 
 router = APIRouter(tags=["health"])
 
@@ -9,6 +10,11 @@ router = APIRouter(tags=["health"])
 @router.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/api/info")
+async def app_info() -> dict[str, str]:
+    return {"service": "home-agent", "version": app_version()}
 
 
 @router.get("/readyz")

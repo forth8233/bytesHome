@@ -1,14 +1,25 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { darkTheme } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
 
+import api from './api.js'
 import { useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const dark = ref(localStorage.getItem('ha_theme') === 'dark')
+
+const appVersion = ref('')
+onMounted(async () => {
+  try {
+    const { data } = await api.get('/info')
+    appVersion.value = data.version || ''
+  } catch {
+    // 静默：拿不到版本号就不显示
+  }
+})
 
 const navItems = [
   { path: '/chat', label: '聊天' },
@@ -40,7 +51,10 @@ function logout() {
         </div>
         <n-layout v-else position="absolute">
           <n-layout-header bordered class="app-header">
-            <div class="brand">家庭管家</div>
+            <div class="brand">
+              家庭管家
+              <span v-if="appVersion" class="brand-version">v{{ appVersion }}</span>
+            </div>
             <nav class="nav">
               <router-link
                 v-for="item in navItems"
@@ -72,3 +86,12 @@ function logout() {
     </n-message-provider>
   </n-config-provider>
 </template>
+
+<style scoped>
+.brand-version {
+  font-size: 12px;
+  font-weight: normal;
+  opacity: 0.65;
+  margin-left: 6px;
+}
+</style>

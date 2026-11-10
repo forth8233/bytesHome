@@ -31,7 +31,7 @@ from app.api.routers import (
 )
 from app.channels.manager import ChannelManager, ChannelNotifier
 from app.chat.service import ChatService
-from app.core.config import get_settings
+from app.core.config import app_version, get_settings
 from app.core.logging import configure_logging
 from app.db.session import SessionFactory, engine, init_db
 from app.events.bus import EventBus
@@ -177,7 +177,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    application = FastAPI(title="Home Agent", version="0.1.0", lifespan=lifespan)
+    application = FastAPI(title="Home Agent", version=app_version(), lifespan=lifespan)
 
     if settings.cors_origin_list:
         application.add_middleware(
@@ -245,7 +245,7 @@ def create_app() -> FastAPI:
 
     @application.get("/")
     async def root() -> dict[str, str]:
-        return {"service": "home-agent", "version": "0.1.0"}
+        return {"service": "home-agent", "version": app_version()}
 
     return application
 
