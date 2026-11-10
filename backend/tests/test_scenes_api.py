@@ -119,6 +119,7 @@ def test_overview_lists_scenes_and_automations(client, auth_headers, ha) -> None
     payload = response.json()
     assert payload["ha_scenes"][0]["entity_id"] == "scene.hui_jia"
     assert payload["ha_scenes"][0]["name"] == "回家"
+    assert payload["ha_scenes"][0]["deletable"] is False
     assert payload["automations"][0]["config_id"] == "ha_agent_x"
     assert payload["scripts"] == []
 
@@ -224,7 +225,7 @@ def test_delete_ha_scene(client, auth_headers, ha) -> None:
     response = client.delete("/api/scenes/ha/scene.hui_jia", headers=auth_headers)
 
     assert response.status_code == 200, response.text
-    assert ("scene", "delete", {"scene_id": "hui_jia"}) in ha.calls
+    assert ("scene", "delete", {"entity_id": "scene.hui_jia"}) in ha.calls
 
 
 def test_trigger_automation(client, auth_headers, ha) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 import yaml
@@ -65,6 +66,22 @@ def _scenes_from(states: list[dict[str, Any]], domain: str) -> list[dict[str, An
     ]
 
 
+def _deletable(state: dict[str, Any]) -> bool:
+    """HA 的 scene.delete 只对 action 场景生效，声明式（scenes.yaml）场景删不了。
+
+    声明式场景的 state 是激活快照时间戳（如 scene.hui_jia），action 场景是非时间戳
+    状态（on/off）。这里用 state 能否解析为 ISO 时间戳来区分，判定不可解析即可删除。
+    """
+    state_val = state.get("state")
+    if not isinstance(state_val, str):
+        return True
+    try:
+        datetime.fromisoformat(state_val)
+    except ValueError:
+        return True
+    return False
+
+
 def _automation_brief(state: dict[str, Any]) -> dict[str, Any]:
     brief = _entity_brief(state)
     attributes = state.get("attributes") or {}
@@ -78,7 +95,11 @@ async def overview(_: AdminUser, adapter: HADep) -> dict[str, Any]:
     """HA 场景、脚本与自动化的总览，列表直接读 HA，不受白名单过滤影响。"""
     states = await _ha_states(adapter)
     return {
-        "ha_scenes": _scenes_from(states, "scene"),
+        "ha_scenes": [
+            {**_entity_brief(state), "deletable": _deletable(state)}
+            for state in states
+            if str(state.get("entity_id", "")).startswith("scene.")
+        ],
         "scripts": _scenes_from(states, "script"),
         "automations": [
             _automation_brief(state)

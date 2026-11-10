@@ -22,6 +22,7 @@ const sceneOpen = ref(false)
 const sceneSaving = ref(false)
 const sceneId = ref('')
 const sceneEntities = ref([])
+const sceneEditing = ref(false)
 
 const NEW_AUTOMATION = `alias: 新自动化
 trigger:
@@ -168,6 +169,14 @@ function confirmDeleteAutomation(row) {
 function openSceneCreator() {
   sceneId.value = ''
   sceneEntities.value = []
+  sceneEditing.value = false
+  sceneOpen.value = true
+}
+
+function openSceneEditor(row) {
+  sceneId.value = String(row.entity_id || '').replace(/^scene\./, '')
+  sceneEntities.value = row.entities || []
+  sceneEditing.value = true
   sceneOpen.value = true
 }
 
@@ -182,7 +191,7 @@ async function createScene() {
       scene_id: sceneId.value.trim(),
       snapshot_entities: sceneEntities.value,
     })
-    message.success('场景已创建')
+    message.success(sceneEditing.value ? '场景已更新' : '场景已创建')
     sceneOpen.value = false
     load()
   } catch (error) {
@@ -222,10 +231,14 @@ const sceneColumns = [
     width: 150,
     render: (row) =>
       h(NSpace, { size: 6 }, {
-        default: () => [
-          actionButton('执行', 'primary', () => activateScene(row)),
-          actionButton('删除', 'error', () => confirmDeleteScene(row)),
-        ],
+        default: () => {
+          const buttons = [actionButton('执行', 'primary', () => activateScene(row))]
+          if (row.deletable !== false) {
+            buttons.push(actionButton('编辑', 'default', () => openSceneEditor(row)))
+            buttons.push(actionButton('删除', 'error', () => confirmDeleteScene(row)))
+          }
+          return buttons
+        },
       }),
   },
 ]
@@ -353,7 +366,7 @@ const automationColumns = [
       </template>
     </n-modal>
 
-    <n-modal v-model:show="sceneOpen" preset="card" style="width: 560px" title="新建 HA 场景">
+    <n-modal v-model:show="sceneOpen" preset="card" style="width: 560px" :title="sceneEditing ? '编辑 HA 场景' : '新建 HA 场景'">
       <n-form label-placement="left" label-width="92">
         <n-form-item label="场景标识">
           <n-input
@@ -377,7 +390,9 @@ const automationColumns = [
       <template #footer>
         <n-space justify="end">
           <n-button @click="sceneOpen = false">取消</n-button>
-          <n-button type="primary" :loading="sceneSaving" @click="createScene">创建</n-button>
+          <n-button type="primary" :loading="sceneSaving" @click="createScene">
+            {{ sceneEditing ? '保存' : '创建' }}
+          </n-button>
         </n-space>
       </template>
     </n-modal>

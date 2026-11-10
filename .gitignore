@@ -20,8 +20,8 @@ backend/.env
 *.secret
 *initial_admin_password*
 
-# Claude Code local settings (command rules can contain pasted keys)
-.claude/settings.local.json
+# Claude Code local settings (command rules can contain pasted keys) — 整个 .claude 目录不同步到仓库
+.claude/
 
 # Frontend
 node_modules/
@@ -36,3 +36,18 @@ dist/
 # Local reference docs (not uploaded to repo)
 主动式家庭管家 Agent 方案说明书*.md
 /智能家居语音技能/
+
+# 运行时调试产物（抓包快照、日志、一次性诊断脚本）
+logs_uvicorn.txt
+ha_services.json
+ha_states.json
+backend/logs_uvicorn.txt
+backend/ha_services.json
+backend/ha_states.json
+*.output
+tools/diag_*/
+backend/tools/diag_*/
+backend/tools/*.json.py
+# 一次性生成的诊断伴生文件（以下划线开头），非正式工具
+backend/tools/_ha_cfg.py
+backend/tools/_lights_out.json
