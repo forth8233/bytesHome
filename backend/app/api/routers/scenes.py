@@ -233,8 +233,9 @@ async def create_ha_scene(
 async def delete_ha_scene(
     entity_id: str, user: AdminUser, session: DbSession, adapter: HADep
 ) -> dict[str, Any]:
-    scene_id = entity_id.split(".", 1)[-1]
-    await _call(adapter, "scene", "delete", {"scene_id": scene_id})
+    # HA scene.delete 没有 scene_id 字段，只能通过 target.entity 定位
+    # （REST 调用以 entity_id 键指定），必须保留完整实体 id。
+    await _call(adapter, "scene", "delete", {"entity_id": entity_id})
     await _call(adapter, "scene", "reload", {})
     add_audit(
         session,
