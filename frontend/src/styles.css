@@ -263,21 +263,44 @@ body {
   justify-content: flex-end;
 }
 
+.message-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.message-row.user .message-block {
+  align-items: flex-end;
+}
+
+/* 用户消息：时间与气泡内文字右缘对齐（缩进气泡的内边距 13px） */
+.message-row.user .bubble-time {
+  margin-right: 13px;
+}
+
+.message-row.assistant .message-block {
+  align-items: flex-start;
+}
+
+/* 助手/系统回复：时间与气泡内文字左缘对齐（缩进气泡的内边距 13px） */
+.message-row.assistant .bubble-time {
+  margin-left: 13px;
+}
+
 .bubble {
   max-width: min(720px, 82%);
+  min-width: 0;
   padding: 10px 13px;
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
 }
 
 .message-row.user .bubble {
   background: rgba(64, 128, 255, 0.16);
+  min-width: 180px;
 }
 
 .message-row.assistant .bubble {
@@ -285,11 +308,11 @@ body {
 }
 
 .bubble-time {
-  align-self: flex-end;
   margin-top: 4px;
-  font-size: 11px;
-  opacity: 0.5;
+  font-size: 10px;
+  opacity: 0.45;
   user-select: none;
+  white-space: nowrap;
 }
 
 .tool-details {

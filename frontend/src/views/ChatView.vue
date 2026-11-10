@@ -228,7 +228,8 @@ onMounted(loadSessions)
           class="message-row"
           :class="entry.role === 'user' ? 'user' : 'assistant'"
         >
-          <div class="bubble">
+          <div class="message-block">
+            <div class="bubble">
             <div v-if="entry.route" class="route-badge">
               <n-tag
                 size="tiny"
@@ -333,6 +334,7 @@ onMounted(loadSessions)
                 </span>
               </div>
             </n-card>
+            </div>
             <div class="bubble-time" v-if="entry.created_at">{{ formatTime(entry.created_at) }}</div>
           </div>
         </div>
