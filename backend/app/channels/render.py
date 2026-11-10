@@ -301,3 +301,37 @@ def _build_card(
         },
         "elements": elements,
     }
+
+
+def render_schedule_receipt(
+    *, ok: bool, summary: str, result_text: str = "", detail: dict[str, Any] | None = None
+) -> OutboundMessage:
+    """定时任务执行后的主动回执：告诉设定者任务已执行成功/失败。
+
+    由 ScheduleRunner 在任务出账后调用，经 ChannelNotifier 推到设定者的渠道。
+    ok=True 时字体用绿色，失败用红色；同 _build_card 结构，纯文本 + 可选卡片。
+    """
+    head = f"定时任务已完成：{summary}" if ok else f"定时任务执行失败：{summary}"
+    lines = [head]
+    if result_text:
+        lines.append(result_text)
+    if detail:
+        for key, value in detail.items():
+            if key == "actions":
+                continue
+            if isinstance(value, list):
+                value = "；".join(str(v) for v in value)
+            if value in ("", None):
+                continue
+            lines.append(f"{key}：{value}")
+    plain = "\n".join(lines)
+
+    card = _build_card(
+        title=head,
+        reply=plain,
+        state_lines=[],
+        proposal=None,
+        draft=None,
+    )
+    card["header"]["template"] = "green" if ok else "red"
+    return OutboundMessage(text=plain, card=card)

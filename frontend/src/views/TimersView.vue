@@ -107,6 +107,21 @@ const taskColumns = [
     render: (row) => row.username || '—',
   },
   {
+    title: '来源',
+    key: 'source_channel',
+    width: 90,
+    render: (row) => {
+      if (row.source_channel && row.source_channel.startsWith('feishu')) {
+        return h(
+          NTag,
+          { size: 'small', type: 'primary' },
+          { default: () => '飞书' },
+        )
+      }
+      return '网页'
+    },
+  },
+  {
     title: '状态',
     key: 'status',
     width: 90,

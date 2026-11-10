@@ -29,11 +29,13 @@ class ScheduleRunner:
         session_factory,
         adapter,
         guard,
+        channel_notifier=None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
     ) -> None:
         self._session_factory = session_factory
         self._adapter = adapter
         self._guard = guard
+        self.notifier = channel_notifier
         self._poll_interval = poll_interval
         self._next_check_at: float | None = None
 
@@ -73,12 +75,14 @@ class ScheduleRunner:
         actions: list[dict[str, Any]] = json.loads(task.actions_json or "[]")
         if not actions:
             await self._resolve(task, "failed", "任务无可用动作", detail={"reason": "empty actions"})
+            await self._notify_task_done(task, "failed", "任务无可用动作", None)
             return
 
         async with self._session_factory() as session:
             member = await session.get(Member, task.member_id) if task.member_id else None
             if task.member_id is not None and member is None:
                 await self._resolve(task, "failed", "发起人不存在", detail={"reason": "member missing"})
+                await self._notify_task_done(task, "failed", "发起人不存在", None)
                 return
 
             guard = await self._guard.check(actions, member=member, source="scheduled_task")
@@ -90,6 +94,9 @@ class ScheduleRunner:
                     f"安全策略拦截：{reason}",
                     detail={"reason": reason, "guard": guard.reasons},
                 )
+                await self._notify_task_done(
+                    task, "failed", f"安全策略拦截：{reason}", member
+                )
                 return
             if guard.requires_confirm:
                 await self._resolve(
@@ -97,6 +104,9 @@ class ScheduleRunner:
                     "failed",
                     "该动作需人工确认，定时不自动执行",
                     detail={"reason": "requires_confirm", "risk_level": guard.risk_level},
+                )
+                await self._notify_task_done(
+                    task, "failed", "该动作需人工确认，定时不自动执行", member
                 )
                 return
 
@@ -108,6 +118,7 @@ class ScheduleRunner:
                     note,
                     detail={"reason": note, "status": "partial"},
                 )
+                await self._notify_task_done(task, "failed", note, member)
                 return
             await self._resolve(
                 task,
@@ -116,6 +127,35 @@ class ScheduleRunner:
                 detail={"note": note, "actions": actions, "status": "ok"},
                 member_id=member.id if member else None,
             )
+            await self._notify_task_done(task, "ok", note or "已执行", member)
+
+    async def _notify_task_done(
+        self,
+        task: ScheduledTask,
+        status: str,
+        note: str,
+        member: "Member | None",
+    ) -> None:
+        """任务执行后给设定者发回执。
+
+        优先回精确来源会话（source_channel/source_ref），取不到再按成员全渠道 fan-out；
+        未接渠道（sender 为 None）直接跳过，不影响本任务结果。
+        """
+        from app.channels.render import render_schedule_receipt
+
+        notifier = self.notifier
+        if notifier is None:
+            return
+        ok = status == "ok"
+        summary = task.summary or task.text or ""
+        message = render_schedule_receipt(ok=ok, summary=summary, result_text=note)
+        try:
+            if task.source_channel and task.source_ref:
+                await notifier.send_to(task.source_channel, task.source_ref, message)
+            elif member is not None:
+                await notifier.push_to_member(member, message)
+        except Exception:  # noqa: BLE001 - 回执失败不影响任务结果
+            log.exception("scheduler.receipt_failed: task_id=%s", task.id)
 
     async def _execute(
         self, session, actions: list[dict[str, Any]]

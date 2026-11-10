@@ -386,6 +386,8 @@ class ScheduledTask(Base):
     text: Mapped[str] = mapped_column(String(255))  # 原始指令文本
     summary: Mapped[str] = mapped_column(String(128))  # 用户可读描述
     actions_json: Mapped[str] = mapped_column(Text, default="[]")  # 规范化动作
+    source_channel: Mapped[str] = mapped_column(String(16), default="")  # 设定来源渠道（""=网页）
+    source_ref: Mapped[str] = mapped_column(String(128), default="")  # 设定来源会话标识（飞书 chat_id）
     run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/cancelled/fired/failed
     result_text: Mapped[str] = mapped_column(Text, default="")

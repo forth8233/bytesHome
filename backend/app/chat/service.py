@@ -207,7 +207,9 @@ class ChatService:
         route_result = None
         if self._fast_path is not None:
             try:
-                route_result = await self._fast_path.route(member, message, session_id)
+                route_result = await self._fast_path.route(
+                    member, message, session_id, channel=channel, channel_ref=channel_ref
+                )
             except Exception:  # noqa: BLE001 - 快路径失败必须回退到慢思考
                 logger.exception("chat.fast_path_failed", session_id=session_id)
                 route_result = None

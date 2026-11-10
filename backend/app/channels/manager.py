@@ -301,6 +301,25 @@ class ChannelNotifier:
             ),
         )
 
+    async def send_to(
+        self, channel: str, chat_id: str, message: "OutboundMessage"
+    ) -> bool:
+        """向指定渠道/会话主动发一条消息（消息来源明确时使用，如定时执行回执）。
+
+        不做成员级 fan-out，直接投递到 (channel, chat_id)；channel 是实例名
+        （feishu / feishu_2 …），chat_id 是会话内标识。实际不可用返回 False，不抛错。
+        """
+        if not channel or not chat_id:
+            return False
+        adapter = self._manager.dispatcher.adapters().get(channel)
+        if adapter is None:
+            return False
+        return await self._manager.dispatcher._send(channel, chat_id, message)
+
+    async def push_to_member(self, member, message: "OutboundMessage") -> bool:
+        """按成员的所有启用渠道 fan-out 推送（接收人明确、来源不限定单渠道时用）。"""
+        return await self._fan_out(member, message)
+
     def _push_allowed(self, member, kind: str) -> bool:
         if not self._config.get("channels.push_enabled", True):
             return False

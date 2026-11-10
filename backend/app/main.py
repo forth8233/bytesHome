@@ -112,6 +112,9 @@ async def lifespan(app: FastAPI):
         chat_service=chat_service,
         proposals=proposal_service,
     )
+    channel_notifier = ChannelNotifier(
+        session_factory=SessionFactory, manager=channel_manager, config=config
+    )
     reasoner = Reasoner(
         config=config,
         queue=bus.subscribe("reasoner"),
@@ -121,12 +124,7 @@ async def lifespan(app: FastAPI):
         proposals=proposal_service,
         session_factory=SessionFactory,
         sse=sse_hub,
-        notifier=MultiNotifier(
-            HANotifier(config, adapter),
-            ChannelNotifier(
-                session_factory=SessionFactory, manager=channel_manager, config=config
-            ),
-        ),
+        notifier=MultiNotifier(HANotifier(config, adapter), channel_notifier),
     )
     await reasoner.start()
     await channel_manager.start()
@@ -135,6 +133,7 @@ async def lifespan(app: FastAPI):
         session_factory=SessionFactory,
         adapter=adapter,
         guard=guard,
+        channel_notifier=channel_notifier,
     )
     sched_task = asyncio.create_task(schedule_runner.run(), name="scheduled-task-runner")
 

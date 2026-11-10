@@ -25,6 +25,8 @@ def _task_dict(task: ScheduledTask, username: str = "") -> dict[str, Any]:
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "member_id": task.member_id,
         "username": username,
+        "source_channel": task.source_channel or "",
+        "source_ref": task.source_ref or "",
     }
 
 

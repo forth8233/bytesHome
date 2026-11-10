@@ -267,7 +267,13 @@ class FastPathEngine:
         return bool(self._settings().get("enabled", True))
 
     async def route(
-        self, member, text: str, session_id: int | None = None
+        self,
+        member,
+        text: str,
+        session_id: int | None = None,
+        *,
+        channel: str = "",
+        channel_ref: str = "",
     ) -> RouteResult | None:
         settings = self._settings()
         if not settings.get("enabled", True):
@@ -376,7 +382,8 @@ class FastPathEngine:
                 text=text[:80],
             )
             result = await self._handle_schedule(
-                member, spec, states, resolver, view_patterns, settings, key
+                member, spec, states, resolver, view_patterns, settings, key,
+                channel=channel, channel_ref=channel_ref,
             )
             if result is not None:
                 return self._finish(result, started)
@@ -631,6 +638,9 @@ class FastPathEngine:
         view_patterns: list[str] | None,
         settings: dict[str, Any],
         key: tuple[int, int],
+        *,
+        channel: str = "",
+        channel_ref: str = "",
     ) -> RouteResult | None:
         """快路径命中定时：把剥离时间后的动作解析为规范化动作落库，由调度器到时触发。"""
         if not self._allow_rate(member.id, int(settings["member_rate_limit_per_minute"])):
@@ -689,11 +699,14 @@ class FastPathEngine:
             inverse = self._inverse_actions(actions)
             if inverse:
                 await self._persist_scheduled_task(
-                    member, spec, inverse, status_note="发起时已立即执行"
+                    member, spec, inverse, status_note="发起时已立即执行",
+                    channel=channel, channel_ref=channel_ref,
                 )
             return executed
 
-        task_id = await self._persist_scheduled_task(member, spec, actions)
+        task_id = await self._persist_scheduled_task(
+            member, spec, actions, channel=channel, channel_ref=channel_ref,
+        )
         self._counters["scheduled"] += 1
         return RouteResult(
             status="executed",
@@ -775,6 +788,8 @@ class FastPathEngine:
         actions: list[dict[str, Any]],
         *,
         status_note: str = "",
+        channel: str = "",
+        channel_ref: str = "",
     ) -> int:
         summary = spec.summary
         run_at = spec.run_at or spec.auto_run_at
@@ -787,6 +802,8 @@ class FastPathEngine:
                 text=spec.title,
                 summary=summary or spec.title,
                 actions_json=json.dumps(actions, ensure_ascii=False),
+                source_channel=channel or "",
+                source_ref=channel_ref or "",
                 run_at=run_at,
                 status="pending",
             )
