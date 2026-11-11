@@ -4,7 +4,7 @@
 Usage:
     python ssh_ha227.py "<remote command>"
 
-Connects to 192.168.2.227 as tantron, passing the password via an env var
+Connects to 192.168.2.127 as tantron, passing the password via an env var
 HA227_PW (so it never appears on a command line). Requires paramiko.
 """
 import os
@@ -12,7 +12,7 @@ import sys
 
 import paramiko
 
-HOST = "192.168.2.227"
+HOST = "192.168.2.127"
 USER = "tantron"
 PORT = 22
 
